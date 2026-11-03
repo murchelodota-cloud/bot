@@ -1,0 +1,10 @@
+services:
+  lika:
+    build: .
+    env_file: .env
+    restart: unless-stopped
+    volumes:
+      - ./data:/app/data
+    environment:
+      - DB_PATH=/app/data/lika.db
+      - TZ=Europe/Moscow
