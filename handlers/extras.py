@@ -36,7 +36,7 @@ async def fire_due_reminders(bot: Bot):
             name = u["first_name"] if u else None
             sent = await bot.send_message(
                 r["chat_id"],
-                say(st, "remind_fired", user=mention(r["user_id"], name), text=html.escape(r["text"])),
+                say(st, "remind_fired", chat_id=r["chat_id"], user=mention(r["user_id"], name), text=html.escape(r["text"])),
             )
             await db.remember_bot_message(r["chat_id"], sent.message_id)
         except TelegramBadRequest:
@@ -95,7 +95,7 @@ async def send_qotd(bot: Bot, chat_id: int):
     st = await style(chat_id)
     day = time.strftime("%Y-%m-%d")
     idx = (int(time.time()) // 86400 + abs(chat_id)) % len(QUESTIONS)
-    sent = await bot.send_message(chat_id, say(st, "qotd", q=QUESTIONS[idx]))
+    sent = await bot.send_message(chat_id, say(st, "qotd", chat_id=chat_id, q=QUESTIONS[idx]))
     await db.remember_bot_message(chat_id, sent.message_id)
     await db.mark_qotd(chat_id, day)
 

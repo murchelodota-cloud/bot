@@ -1,5 +1,6 @@
 """Масса, карточка, топ, реакции."""
 import html
+import random
 from typing import Any, Callable, Awaitable
 from aiogram import Router, BaseMiddleware
 from aiogram.filters import Command
@@ -23,7 +24,19 @@ class MassMiddleware(BaseMiddleware):
             await db.add_mass(event.chat.id, event.from_user.id, MASS_PER_MESSAGE, daily_cap=MASS_DAILY_CAP)
             msgs = await db.inc_msgs(event.chat.id, event.from_user.id)
             await check_achievements(event, row, msgs)
+            await maybe_chatter(event)
         return await handler(event, data)
+
+
+async def maybe_chatter(msg: Message):
+    """Иногда Саррочка встревает сама — только в пикми-стиле и не на команды."""
+    if (msg.text or "").startswith("/"):
+        return
+    s = await db.settings(msg.chat.id)
+    if not s["chatter"] or await style(msg.chat.id) != "pickme":
+        return
+    if random.random() < 1 / max(5, int(s["chatter_every"])):
+        await reply(msg, "chatter")
 
 
 @router.message(Command("me"))
@@ -59,7 +72,7 @@ async def on_reaction(event: MessageReactionUpdated):
         await db.bump_mood(chat_id, 5)
         if await style(chat_id) == "pickme":
             sent = await event.bot.send_message(
-                chat_id, say("pickme", "bot_reaction", user=mention(event.user.id, event.user.first_name)))
+                chat_id, say("pickme", "bot_reaction", chat_id=chat_id, user=mention(event.user.id, event.user.first_name)))
             await db.remember_bot_message(chat_id, sent.message_id)
         return
     # реакция на чужое сообщение: массу получает автор — но Bot API не говорит, кто автор.

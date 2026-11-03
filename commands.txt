@@ -8,6 +8,7 @@ unban - разбан
 kick - кик
 court - суд чата: голосование за разбан
 report - пожаловаться админам (ответом)
+play - трек: /play название или ссылка
 remind - напоминание: /remind 2h текст
 tag - стикер-тег: /tag имя, /tag add имя
 tags - список стикер-тегов
@@ -16,6 +17,7 @@ top - топ по массе
 thanks - сказать Саррочке спасибо
 mood - настроение Саррочки
 style - стиль: pickme | strict | normal
+phrase - мои реплики: /phrase list warn
 settings - настройки чата
 digest - дайджест недели
 help - помощь

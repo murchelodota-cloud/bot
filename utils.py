@@ -82,10 +82,10 @@ async def style(chat_id: int) -> str:
 async def reply(msg: Message, key: str, **kw) -> Message:
     """Ответить фразой в стиле чата; при низком настроении Саррочка вздыхает."""
     st = await style(msg.chat.id)
-    text = say(st, key, **kw)
+    text = say(st, key, chat_id=msg.chat.id, **kw)
     if st == "pickme" and key not in ("mood", "me", "help", "settings"):
         if await db.mood(msg.chat.id) < 30:
-            text += "\n" + say(st, "sigh")
+            text += "\n" + say(st, "sigh", chat_id=msg.chat.id)
     sent = await msg.answer(text, disable_web_page_preview=True)
     await db.remember_bot_message(msg.chat.id, sent.message_id)
     return sent

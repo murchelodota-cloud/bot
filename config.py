@@ -24,7 +24,9 @@ DEFAULT_SETTINGS = {
     "mat_soft": 1,            # 1 — мягкий режим (предупреждает), 0 — удаляет
     "dupfilter": 1,           # 1/0 — резать одинаковые сообщения подряд
     "qotd": 1,                # 1/0 — вопрос дня
-    "qotd_hour": 11,          # час, после которого можно слать вопрос дня
+    "qotd_hour": 11,
+    "chatter": 1,             # 1/0 — Саррочка иногда встревает в разговор сама
+    "chatter_every": 30,      # в среднем раз в N сообщений          # час, после которого можно слать вопрос дня
 }
 
 # Масса
@@ -37,3 +39,7 @@ MASS_PER_THANKS = 2
 
 if not BOT_TOKEN:
     raise SystemExit("Заполни BOT_TOKEN в .env (см. .env.example)")
+
+# Музыка
+MUSIC_MAX_MINUTES = 12            # треки длиннее не качаем
+MUSIC_DIR = os.path.join(os.path.dirname(os.path.abspath(DB_PATH)) or ".", "music_tmp")

@@ -51,6 +51,10 @@ CREATE TABLE IF NOT EXISTS tags (
     chat_id INTEGER, name TEXT, file_id TEXT,
     PRIMARY KEY (chat_id, name)
 );
+CREATE TABLE IF NOT EXISTS custom_phrases (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    chat_id INTEGER, key TEXT, text TEXT
+);
 CREATE TABLE IF NOT EXISTS qotd (
     chat_id INTEGER PRIMARY KEY, last_day TEXT
 );
@@ -367,6 +371,38 @@ class DB:
             "INSERT INTO qotd VALUES(?,?) ON CONFLICT(chat_id) DO UPDATE SET last_day=excluded.last_day",
             (chat_id, day),
         )
+        await self.conn.commit()
+
+
+    # ---------- пользовательские реплики ----------
+    async def all_custom_phrases(self) -> dict:
+        cur = await self.conn.execute("SELECT chat_id, key, text FROM custom_phrases ORDER BY id")
+        res: dict = {}
+        for r in await cur.fetchall():
+            res.setdefault(r["chat_id"], {}).setdefault(r["key"], []).append(r["text"])
+        return res
+
+    async def add_custom_phrase(self, chat_id, key, text):
+        await self.conn.execute("INSERT INTO custom_phrases(chat_id,key,text) VALUES(?,?,?)", (chat_id, key, text))
+        await self.conn.commit()
+
+    async def custom_phrases(self, chat_id, key) -> list[str]:
+        cur = await self.conn.execute(
+            "SELECT text FROM custom_phrases WHERE chat_id=? AND key=? ORDER BY id", (chat_id, key))
+        return [r["text"] for r in await cur.fetchall()]
+
+    async def del_custom_phrase(self, chat_id, key, index: int) -> bool:
+        cur = await self.conn.execute(
+            "SELECT id FROM custom_phrases WHERE chat_id=? AND key=? ORDER BY id", (chat_id, key))
+        ids = [r["id"] for r in await cur.fetchall()]
+        if not 0 <= index < len(ids):
+            return False
+        await self.conn.execute("DELETE FROM custom_phrases WHERE id=?", (ids[index],))
+        await self.conn.commit()
+        return True
+
+    async def reset_custom_phrases(self, chat_id, key):
+        await self.conn.execute("DELETE FROM custom_phrases WHERE chat_id=? AND key=?", (chat_id, key))
         await self.conn.commit()
 
 

@@ -45,7 +45,7 @@ async def on_join(event: ChatMemberUpdated, bot: Bot):
     st = await style(chat_id)
     if per_min >= int(s["raid_joins_per_min"]) and not raid_active(chat_id):
         _raid_until[chat_id] = now + 1800  # 30 минут режима рейда
-        m = await bot.send_message(chat_id, say(st, "raid_on", n=per_min))
+        m = await bot.send_message(chat_id, say(st, "raid_on", chat_id=chat_id, n=per_min))
         await db.remember_bot_message(chat_id, m.message_id)
     if raid_active(chat_id):
         try:
@@ -55,7 +55,7 @@ async def on_join(event: ChatMemberUpdated, bot: Bot):
         _pending_captcha.add((chat_id, user.id))
         kb = InlineKeyboardMarkup(inline_keyboard=[[
             InlineKeyboardButton(text="я не бот 🙋", callback_data=f"captcha:{user.id}")]])
-        m = await bot.send_message(chat_id, say(st, "captcha", user=mention(user.id, user.first_name)), reply_markup=kb)
+        m = await bot.send_message(chat_id, say(st, "captcha", chat_id=chat_id, user=mention(user.id, user.first_name)), reply_markup=kb)
         await db.remember_bot_message(chat_id, m.message_id)
 
 
@@ -74,7 +74,7 @@ async def on_captcha(cb: CallbackQuery, bot: Bot):
         pass
     st = await style(chat_id)
     try:
-        await cb.message.edit_text(say(st, "captcha_ok", user=mention(uid, cb.from_user.first_name)))
+        await cb.message.edit_text(say(st, "captcha_ok", chat_id=chat_id, user=mention(uid, cb.from_user.first_name)))
     except TelegramBadRequest:
         pass
     await cb.answer()
@@ -118,7 +118,7 @@ async def on_message(msg: Message, bot: Bot):
                 await msg.delete()
             except TelegramBadRequest:
                 pass
-            m = await bot.send_message(msg.chat.id, say(st, "dup_warn", user=user_mention))
+            m = await bot.send_message(msg.chat.id, say(st, "dup_warn", chat_id=msg.chat.id, user=user_mention))
             await db.remember_bot_message(msg.chat.id, m.message_id)
             return
         if count > 3:
@@ -131,14 +131,14 @@ async def on_message(msg: Message, bot: Bot):
     # мат: мягкий режим — предупреждаем, жёсткий — удаляем
     if s["matfilter"] and MAT_RE.search(text):
         if s["mat_soft"]:
-            m = await bot.send_message(msg.chat.id, say(st, "mat_soft", user=user_mention))
+            m = await bot.send_message(msg.chat.id, say(st, "mat_soft", chat_id=msg.chat.id, user=user_mention))
             await db.remember_bot_message(msg.chat.id, m.message_id)
         else:
             try:
                 await msg.delete()
             except TelegramBadRequest:
                 return
-            m = await bot.send_message(msg.chat.id, say(st, "mat_deleted", user=user_mention))
+            m = await bot.send_message(msg.chat.id, say(st, "mat_deleted", chat_id=msg.chat.id, user=user_mention))
             await db.remember_bot_message(msg.chat.id, m.message_id)
             return
 
@@ -150,5 +150,5 @@ async def on_message(msg: Message, bot: Bot):
             await msg.delete()
         except TelegramBadRequest:
             return
-        m = await bot.send_message(msg.chat.id, say(st, "spam_deleted", user=user_mention))
+        m = await bot.send_message(msg.chat.id, say(st, "spam_deleted", chat_id=msg.chat.id, user=user_mention))
         await db.remember_bot_message(msg.chat.id, m.message_id)

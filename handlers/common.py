@@ -33,7 +33,7 @@ async def cmd_mood(msg: Message):
     m = await db.mood(msg.chat.id)
     st = await style(msg.chat.id)
     comment_key = "mood_low" if m < 30 else "mood_mid" if m < 70 else "mood_high"
-    await reply(msg, "mood", mood=int(m), comment=say(st, comment_key))
+    await reply(msg, "mood", mood=int(m), comment=say(st, comment_key, chat_id=msg.chat.id))
 
 
 @router.message(Command("style"))
@@ -82,7 +82,7 @@ async def send_digest(bot: Bot, chat_id: int):
         f"{i + 1}. {mention(r['user_id'], r['first_name'])} — {int(r[f])}{suf}" for i, r in enumerate(rows)
     ) or "—"
     text = say(
-        st, "digest",
+        st, "digest", chat_id=chat_id,
         active=fmt(active, "msgs", " сообщ."),
         massive=fmt(massive, "mass", " массы"),
         warned=(html.escape(warned["first_name"] or "") + f" ({warned['n']})") if warned else "никого, чудо",

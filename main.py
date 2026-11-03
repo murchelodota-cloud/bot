@@ -8,6 +8,7 @@ from db import db
 from handlers import routers
 from handlers.profile import MassMiddleware
 from handlers.common import send_digest
+import phrases
 from handlers.extras import fire_due_reminders, send_qotd, qotd_due
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -39,6 +40,7 @@ async def reminder_loop(bot: Bot):
 
 async def main():
     await db.init()
+    phrases.CUSTOM.update(await db.all_custom_phrases())
     bot = Bot(BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
     dp = Dispatcher()
     dp.message.outer_middleware(MassMiddleware())

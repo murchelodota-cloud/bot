@@ -200,4 +200,4 @@ async def on_report_action(cb: CallbackQuery, bot: Bot):
 async def _say(msg: Message, key: str) -> str:
     from phrases import say
     from utils import style
-    return say(await style(msg.chat.id), key)
+    return say(await style(msg.chat.id), key, chat_id=msg.chat.id)

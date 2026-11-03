@@ -27,7 +27,7 @@ async def cmd_court(msg: Message, bot: Bot):
     s = await db.settings(msg.chat.id)
     st = await style(msg.chat.id)
     minutes = int(s["court_minutes"])
-    text = say(st, "court_open", by=mention(msg.from_user.id, msg.from_user.first_name),
+    text = say(st, "court_open", chat_id=msg.chat.id, by=mention(msg.from_user.id, msg.from_user.first_name),
                target=mention(uid, name), time=minutes)
     sent = await msg.answer(text, reply_markup=kb(0, "0", "0"))
     court_id = await db.create_court(msg.chat.id, sent.message_id, uid, name, "unban")
@@ -42,7 +42,7 @@ async def on_vote(cb: CallbackQuery, bot: Bot):
     court = await db.court(int(cid))
     st = await style(cb.message.chat.id)
     if not court or court["closed"]:
-        return await cb.answer(say(st, "court_closed"), show_alert=True)
+        return await cb.answer(say(st, "court_closed", chat_id=cb.message.chat.id), show_alert=True)
     row = await db.touch_user(cb.message.chat.id, cb.from_user)
     await db.vote(court["id"], cb.from_user.id, choice, vote_weight(row["mass"]))
     t = await db.tally(court["id"])
@@ -72,10 +72,10 @@ async def _finish_later(bot: Bot, court_id: int, delay: int):
         for uid in await db.court_voters(court_id, "yes"):
             if await db.give_achievement(chat_id, uid, "peacemaker"):
                 u = await db.user(chat_id, uid)
-                m = await bot.send_message(chat_id, say(st, "achievement", user=mention(uid, u["first_name"] if u else None),
+                m = await bot.send_message(chat_id, say(st, "achievement", chat_id=chat_id, user=mention(uid, u["first_name"] if u else None),
                                                         ach=ACHIEVEMENTS["peacemaker"]))
                 await db.remember_bot_message(chat_id, m.message_id)
-    text = say(st, "court_yes" if won else "court_no", target=target, yes=t["yes"][0], no=t["no"][0])
+    text = say(st, "court_yes" if won else "court_no", chat_id=chat_id, target=target, yes=t["yes"][0], no=t["no"][0])
     try:
         await bot.edit_message_reply_markup(chat_id, court["message_id"], reply_markup=None)
     except TelegramBadRequest:

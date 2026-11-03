@@ -4,6 +4,8 @@ from .court import router as court_router
 from .antispam import router as antispam_router
 from .profile import router as profile_router
 from .extras import router as extras_router
+from .music import router as music_router
+from .phrases_cmd import router as phrases_router
 
 # antispam последним: он перехватывает все текстовые сообщения
-routers = [common_router, moderation_router, court_router, profile_router, extras_router, antispam_router]
+routers = [common_router, moderation_router, court_router, profile_router, extras_router, music_router, phrases_router, antispam_router]
