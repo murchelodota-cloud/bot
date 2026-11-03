@@ -80,7 +80,7 @@ async def style(chat_id: int) -> str:
 
 
 async def reply(msg: Message, key: str, **kw) -> Message:
-    """Ответить фразой в стиле чата; при низком настроении Лика вздыхает."""
+    """Ответить фразой в стиле чата; при низком настроении Саррочка вздыхает."""
     st = await style(msg.chat.id)
     text = say(st, key, **kw)
     if st == "pickme" and key not in ("mood", "me", "help", "settings"):

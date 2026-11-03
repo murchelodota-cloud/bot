@@ -47,7 +47,7 @@ async def main():
     asyncio.create_task(reminder_loop(bot))
     # message_reaction и chat_member не приходят по умолчанию — просим явно
     allowed = dp.resolve_used_update_types() + ["message_reaction", "chat_member"]
-    logging.info("Лика запускается. никто не заметит, но запускается.")
+    logging.info("Саррочка запускается. никто не заметит, но запускается.")
     await bot.delete_webhook(drop_pending_updates=True)
     await dp.start_polling(bot, allowed_updates=list(set(allowed)))
 

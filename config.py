@@ -31,7 +31,7 @@ DEFAULT_SETTINGS = {
 MASS_PER_MESSAGE = 1
 MASS_DAILY_CAP = 40           # не больше массы в день за сообщения
 MASS_PER_REACTION = 3         # реакция на твоё сообщение
-MASS_PER_BOT_REACTION = 6     # реакция на сообщение Лики (она это ОЧЕНЬ ценит)
+MASS_PER_BOT_REACTION = 6     # реакция на сообщение Саррочки (она это ОЧЕНЬ ценит)
 MASS_PER_WARN = -15
 MASS_PER_THANKS = 2
 
