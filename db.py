@@ -74,6 +74,9 @@ CREATE TABLE IF NOT EXISTS daily_activity (
     chat_id INTEGER, user_id INTEGER, day TEXT, n INTEGER DEFAULT 0,
     PRIMARY KEY (chat_id, user_id, day)
 );
+CREATE TABLE IF NOT EXISTS music_cache (
+    key TEXT PRIMARY KEY, file_id TEXT, title TEXT, artist TEXT, duration INTEGER, hits INTEGER DEFAULT 0
+);
 CREATE TABLE IF NOT EXISTS ranks (
     chat_id INTEGER, user_id INTEGER, rank INTEGER, by_user INTEGER, set_at INTEGER,
     PRIMARY KEY (chat_id, user_id)
@@ -600,6 +603,23 @@ class DB:
 
     async def set_bio(self, chat_id, user_id, bio):
         await self.conn.execute("UPDATE users SET bio=? WHERE chat_id=? AND user_id=?", (bio, chat_id, user_id))
+        await self.conn.commit()
+
+
+    # ---------- кэш музыки ----------
+    async def music_get(self, key: str):
+        cur = await self.conn.execute("SELECT * FROM music_cache WHERE key=?", (key,))
+        row = await cur.fetchone()
+        if row:
+            await self.conn.execute("UPDATE music_cache SET hits=hits+1 WHERE key=?", (key,))
+            await self.conn.commit()
+        return row
+
+    async def music_put(self, key: str, file_id: str, title: str, artist: str, duration: int):
+        await self.conn.execute(
+            "INSERT INTO music_cache(key,file_id,title,artist,duration) VALUES(?,?,?,?,?) "
+            "ON CONFLICT(key) DO UPDATE SET file_id=excluded.file_id",
+            (key, file_id, title, artist, duration))
         await self.conn.commit()
 
 
