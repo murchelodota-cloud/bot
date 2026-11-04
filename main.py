@@ -10,6 +10,7 @@ from handlers.profile import MassMiddleware
 from handlers.common import send_digest
 import phrases
 from handlers.extras import fire_due_reminders, send_qotd, qotd_due
+from handlers.coins import month_results, month_results_due, mark_month_awarded
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 
@@ -24,6 +25,9 @@ async def digest_loop(bot: Bot):
                     await send_digest(bot, chat_id)
                 if await qotd_due(bot, chat_id):
                     await send_qotd(bot, chat_id)
+                if await month_results_due(chat_id):
+                    await mark_month_awarded(chat_id)
+                    await month_results(bot, chat_id)
             except Exception as e:  # чат мог удалить бота
                 logging.warning("digest/qotd %s: %s", chat_id, e)
 

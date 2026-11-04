@@ -13,7 +13,7 @@ from aiogram.types import Message
 from db import db
 import phrases
 from phrases import PHRASES, KEY_HELP
-from utils import reply, is_admin, style
+from utils import reply, deny, style
 
 router = Router()
 MAX_LEN = 400
@@ -33,10 +33,10 @@ def _usage() -> str:
     )
 
 
-@router.message(Command("phrase", "phrases"))
+@router.message(Command("phrase", "phrases", "реплика", "реплики", prefix="/!"))
 async def cmd_phrase(msg: Message, bot: Bot):
-    if not await is_admin(bot, msg.chat.id, msg.from_user.id):
-        return await reply(msg, "not_admin")
+    if await deny(msg, bot, "phrase"):
+        return
     parts = (msg.text or "").split(maxsplit=3)
     if len(parts) < 3:
         return await msg.answer(_usage(), disable_web_page_preview=True)

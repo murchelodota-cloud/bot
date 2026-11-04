@@ -5,31 +5,32 @@ from aiogram.filters import Command
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.exceptions import TelegramBadRequest
 from db import db
-from config import MASS_PER_WARN, REPORT_CHAT_ID
-from utils import (reply, is_admin, mention, resolve_target, parse_duration,
-                   human_duration, warn_weight, MUTE_PERMS, FULL_PERMS)
+from config import MASS_PER_WARN, REPORT_CHAT_ID, OWNER_IDS
+from utils import (reply, deny, rank_of, rank_name, has_rank, mention, resolve_target, parse_duration,
+                   human_duration, warn_weight, MUTE_PERMS, FULL_PERMS, MOD_MUTE_MAX, RANK_ALIASES, split_args)
 
 router = Router()
 
 
-async def _prepare(msg: Message, bot: Bot):
-    """Общая проверка: админ ли автор, есть ли цель, не админ ли цель."""
-    if not await is_admin(bot, msg.chat.id, msg.from_user.id):
-        await reply(msg, "not_admin")
+async def _prepare(msg: Message, bot: Bot, action: str):
+    """Общая проверка: хватает ли ранга, есть ли цель, не выше ли цель по рангу."""
+    if await deny(msg, bot, action):
         return None
     uid, name, args = await resolve_target(msg)
     if not uid:
         await reply(msg, "no_target")
         return None
-    if await is_admin(bot, msg.chat.id, uid):
-        await reply(msg, "target_admin")
+    me = await rank_of(bot, msg.chat.id, msg.from_user.id)
+    target = await rank_of(bot, msg.chat.id, uid)
+    if target >= me:
+        await reply(msg, "target_higher", user=mention(uid, name))
         return None
     return uid, name, args
 
 
-@router.message(Command("warn"))
+@router.message(Command("warn", "варн", "пред", prefix="/!"))
 async def cmd_warn(msg: Message, bot: Bot):
-    if not (t := await _prepare(msg, bot)):
+    if not (t := await _prepare(msg, bot, "warn")):
         return
     uid, name, args = t
     reason = " ".join(args) or "без причины"
@@ -53,16 +54,16 @@ async def cmd_warn(msg: Message, bot: Bot):
         await reply(msg, "cant", reason=html.escape(str(e)))
 
 
-@router.message(Command("unwarn"))
+@router.message(Command("unwarn", "анварн", "снятьпред", "минуспред", prefix="/!"))
 async def cmd_unwarn(msg: Message, bot: Bot):
-    if not (t := await _prepare(msg, bot)):
+    if not (t := await _prepare(msg, bot, "unwarn")):
         return
     uid, name, _ = t
     await db.clear_warns(msg.chat.id, uid)
     await msg.answer(f"преды {mention(uid, name)} сняты.")
 
 
-@router.message(Command("warns"))
+@router.message(Command("warns", "преды", "варны", prefix="/!"))
 async def cmd_warns(msg: Message):
     uid, name, _ = await resolve_target(msg)
     if not uid:
@@ -76,12 +77,14 @@ async def cmd_warns(msg: Message):
     await msg.answer(f"преды {mention(uid, name)} — всего {total}:\n" + "\n".join(lines))
 
 
-@router.message(Command("mute"))
+@router.message(Command("mute", "мут", "заткнись", prefix="/!"))
 async def cmd_mute(msg: Message, bot: Bot):
-    if not (t := await _prepare(msg, bot)):
+    if not (t := await _prepare(msg, bot, "mute")):
         return
     uid, name, args = t
     secs = parse_duration(args[0] if args else None, default_hours=1)
+    if secs > MOD_MUTE_MAX and await rank_of(bot, msg.chat.id, msg.from_user.id) < 2:
+        return await reply(msg, "mute_too_long", max=human_duration(MOD_MUTE_MAX))
     try:
         await bot.restrict_chat_member(msg.chat.id, uid, MUTE_PERMS, until_date=int(time.time()) + secs)
         await reply(msg, "mute", user=mention(uid, name), time=human_duration(secs))
@@ -89,9 +92,9 @@ async def cmd_mute(msg: Message, bot: Bot):
         await reply(msg, "cant", reason=html.escape(str(e)))
 
 
-@router.message(Command("unmute"))
+@router.message(Command("unmute", "размут", "анмут", prefix="/!"))
 async def cmd_unmute(msg: Message, bot: Bot):
-    if not (t := await _prepare(msg, bot)):
+    if not (t := await _prepare(msg, bot, "unmute")):
         return
     uid, name, _ = t
     try:
@@ -101,9 +104,9 @@ async def cmd_unmute(msg: Message, bot: Bot):
         await reply(msg, "cant", reason=html.escape(str(e)))
 
 
-@router.message(Command("ban"))
+@router.message(Command("ban", "бан", prefix="/!"))
 async def cmd_ban(msg: Message, bot: Bot):
-    if not (t := await _prepare(msg, bot)):
+    if not (t := await _prepare(msg, bot, "ban")):
         return
     uid, name, args = t
     reason = " ".join(args) or "без причины"
@@ -114,10 +117,10 @@ async def cmd_ban(msg: Message, bot: Bot):
         await reply(msg, "cant", reason=html.escape(str(e)))
 
 
-@router.message(Command("unban"))
+@router.message(Command("unban", "разбан", "анбан", prefix="/!"))
 async def cmd_unban(msg: Message, bot: Bot):
-    if not await is_admin(bot, msg.chat.id, msg.from_user.id):
-        return await reply(msg, "not_admin")
+    if await deny(msg, bot, "unban"):
+        return
     uid, name, _ = await resolve_target(msg)
     if not uid:
         return await reply(msg, "no_target")
@@ -128,9 +131,9 @@ async def cmd_unban(msg: Message, bot: Bot):
         await reply(msg, "cant", reason=html.escape(str(e)))
 
 
-@router.message(Command("kick"))
+@router.message(Command("kick", "кик", "выгнать", prefix="/!"))
 async def cmd_kick(msg: Message, bot: Bot):
-    if not (t := await _prepare(msg, bot)):
+    if not (t := await _prepare(msg, bot, "kick")):
         return
     uid, name, _ = t
     try:
@@ -141,7 +144,7 @@ async def cmd_kick(msg: Message, bot: Bot):
         await reply(msg, "cant", reason=html.escape(str(e)))
 
 
-@router.message(Command("report"))
+@router.message(Command("report", "репорт", "жалоба", prefix="/!"))
 async def cmd_report(msg: Message, bot: Bot):
     if not msg.reply_to_message:
         return await reply(msg, "no_target")
@@ -176,8 +179,8 @@ async def cmd_report(msg: Message, bot: Bot):
 async def on_report_action(cb: CallbackQuery, bot: Bot):
     _, action, chat_id, uid = cb.data.split(":")
     chat_id, uid = int(chat_id), int(uid)
-    if not await is_admin(bot, chat_id, cb.from_user.id):
-        return await cb.answer("ты не админ того чата", show_alert=True)
+    if not await has_rank(bot, chat_id, cb.from_user.id, "report_action"):
+        return await cb.answer("нужен ранг младшего админа того чата", show_alert=True)
     who = mention(cb.from_user.id, cb.from_user.first_name)
     try:
         if action == "m":
@@ -195,6 +198,59 @@ async def on_report_action(cb: CallbackQuery, bot: Bot):
     except TelegramBadRequest:
         pass
     await cb.answer("готово")
+
+
+@router.message(Command("rank", "setrank", "ранг", prefix="/!"))
+async def cmd_rank(msg: Message, bot: Bot):
+    uid, name, args = await resolve_target(msg)
+    if not uid:
+        return await reply(msg, "rank_usage")
+    if not args:  # просто показать
+        r = await rank_of(bot, msg.chat.id, uid)
+        return await reply(msg, "rank_show", user=mention(uid, name), rank=rank_name(r))
+    if await deny(msg, bot, "rank"):
+        return
+    key = "".join(args).lower().replace("ё", "е").replace(" ", "")
+    key = {"младшийадмин": "младший", "старшийадмин": "старший"}.get(key, key)
+    if key not in RANK_ALIASES:
+        return await reply(msg, "rank_usage")
+    new = RANK_ALIASES[key]
+    me = await rank_of(bot, msg.chat.id, msg.from_user.id)
+    target = await rank_of(bot, msg.chat.id, uid)
+    if uid == msg.from_user.id or target >= me or new >= me and msg.from_user.id not in OWNER_IDS:
+        return await reply(msg, "target_higher", user=mention(uid, name))
+    await db.set_rank(msg.chat.id, uid, new, msg.from_user.id)
+    if new == 0:
+        return await reply(msg, "rank_removed", user=mention(uid, name))
+    await reply(msg, "rank_set", user=mention(uid, name), rank=rank_name(new))
+
+
+@router.message(Command("unrank", "снятьранг", prefix="/!"))
+async def cmd_unrank(msg: Message, bot: Bot):
+    uid, name, _ = await resolve_target(msg)
+    if not uid:
+        return await reply(msg, "rank_usage")
+    if await deny(msg, bot, "rank"):
+        return
+    if await rank_of(bot, msg.chat.id, uid) >= await rank_of(bot, msg.chat.id, msg.from_user.id):
+        return await reply(msg, "target_higher", user=mention(uid, name))
+    await db.set_rank(msg.chat.id, uid, 0, msg.from_user.id)
+    await reply(msg, "rank_removed", user=mention(uid, name))
+
+
+@router.message(Command("ranks", "admins", "ранги", "админы", prefix="/!"))
+async def cmd_ranks(msg: Message, bot: Bot):
+    rows = await db.list_ranks(msg.chat.id)
+    lines = [f"• {mention(r['user_id'], r['first_name'])} — {rank_name(r['rank'])}" for r in rows]
+    try:
+        for a in await bot.get_chat_administrators(msg.chat.id):
+            if not a.user.is_bot and all(r["user_id"] != a.user.id for r in rows):
+                lines.insert(0, f"• {mention(a.user.id, a.user.first_name)} — {rank_name(4 if a.status == 'creator' else 3)} (Telegram)")
+    except TelegramBadRequest:
+        pass
+    if not lines:
+        return await reply(msg, "rank_list_empty")
+    await reply(msg, "rank_list", list="\n".join(lines))
 
 
 async def _say(msg: Message, key: str) -> str:

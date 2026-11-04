@@ -5,7 +5,7 @@ import logging
 import os
 import re
 from collections import defaultdict
-from aiogram import Router, Bot
+from aiogram import Router, Bot, F
 from aiogram.filters import Command
 from aiogram.types import Message, FSInputFile
 from aiogram.exceptions import TelegramBadRequest
@@ -16,6 +16,15 @@ from config import MUSIC_MAX_MINUTES, MUSIC_DIR
 router = Router()
 _locks: dict[int, asyncio.Lock] = defaultdict(asyncio.Lock)
 URL_RE = re.compile(r"https?://\S+")
+# «включи …», «поставь …», «саррочка, включи …», «хочу послушать …», «найди песню …»
+NATURAL_RE = re.compile(
+    r"^(?:саррочка|сарочка|сара|бот)?[,!\s]*"
+    r"(?:включи|поставь|врубай|врубни|заиграй|найди|найти|поищи|скинь|кинь|дай|хочу послушать|"
+    r"трек|песню|песня|музыку|музыка)"
+    r"(?:\s+(?:мне|нам|пожалуйста|плиз|трек|песню|песня|музыку))*"
+    r"[,:!\s]+(.{2,120})$",
+    re.I | re.S,
+)
 
 
 def _ydl_opts(outtmpl: str) -> dict:
@@ -57,9 +66,21 @@ def _download(query: str) -> dict:
         }
 
 
-@router.message(Command("play", "p"))
+@router.message(Command("play", "p", "трек", "плей", prefix="/!"))
 async def cmd_play(msg: Message, bot: Bot):
-    query = " ".join(split_args(msg)).strip()
+    await play(msg, " ".join(split_args(msg)).strip())
+
+
+@router.message(F.text.regexp(NATURAL_RE).as_("m"))
+async def natural_play(msg: Message, m: re.Match):
+    """«включи <трек>» без команды."""
+    s = await db.settings(msg.chat.id)
+    if not s.get("play_natural", 1):
+        return
+    await play(msg, m.group(1).strip(" .!?"))
+
+
+async def play(msg: Message, query: str):
     if not query:
         return await reply(msg, "play_usage")
     lock = _locks[msg.chat.id]
@@ -67,11 +88,18 @@ async def cmd_play(msg: Message, bot: Bot):
         return await reply(msg, "play_busy")
     async with lock:
         status = await reply(msg, "play_searching", q=html.escape(query[:80]))
-        try:
-            res = await asyncio.get_running_loop().run_in_executor(None, _download, query)
-        except Exception as e:
-            logging.warning("play %r: %s", query, e)
-            res = {"error": "fail"}
+        loop = asyncio.get_running_loop()
+        res = {"error": "fail"}
+        # сначала как есть (ссылка или YouTube), если YouTube отказал — SoundCloud
+        attempts = [query] if URL_RE.search(query) else [query, f"scsearch1:{query}"]
+        for q in attempts:
+            try:
+                res = await loop.run_in_executor(None, _download, q)
+            except Exception as e:
+                logging.warning("play %r: %s", q, str(e)[:300])
+                res = {"error": "fail"}
+            if "error" not in res or res["error"] == "toolong":
+                break
         try:
             await status.delete()
         except TelegramBadRequest:

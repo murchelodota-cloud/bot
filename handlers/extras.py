@@ -7,7 +7,7 @@ from aiogram.types import Message
 from aiogram.exceptions import TelegramBadRequest
 from db import db
 from phrases import say, QUESTIONS
-from utils import (reply, is_admin, mention, split_args, parse_duration,
+from utils import (reply, deny, mention, split_args, parse_duration,
                    human_duration, style)
 
 router = Router()
@@ -54,8 +54,8 @@ async def cmd_tag(msg: Message, bot: Bot):
     chat_id = msg.chat.id
 
     if action == "add":
-        if not await is_admin(bot, chat_id, msg.from_user.id):
-            return await reply(msg, "not_admin")
+        if await deny(msg, bot, "tag"):
+            return
         name = args[1].lower().lstrip("#") if len(args) > 1 else None
         sticker = msg.reply_to_message and msg.reply_to_message.sticker
         if not name or not sticker:
@@ -64,8 +64,8 @@ async def cmd_tag(msg: Message, bot: Bot):
         return await reply(msg, "tag_saved", name=html.escape(name))
 
     if action == "del":
-        if not await is_admin(bot, chat_id, msg.from_user.id):
-            return await reply(msg, "not_admin")
+        if await deny(msg, bot, "tag"):
+            return
         name = args[1].lower().lstrip("#") if len(args) > 1 else None
         if not name:
             return await reply(msg, "tag_usage")

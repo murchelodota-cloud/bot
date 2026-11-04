@@ -5,7 +5,7 @@ from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKe
 from aiogram.exceptions import TelegramBadRequest
 from db import db
 from phrases import say, ACHIEVEMENTS
-from utils import reply, is_admin, mention, resolve_target, vote_weight, style
+from utils import reply, deny, mention, resolve_target, vote_weight, style
 
 router = Router()
 
@@ -17,10 +17,10 @@ def kb(court_id: int, yes: str, no: str) -> InlineKeyboardMarkup:
     ]])
 
 
-@router.message(Command("court"))
+@router.message(Command("court", "суд", prefix="/!"))
 async def cmd_court(msg: Message, bot: Bot):
-    if not await is_admin(bot, msg.chat.id, msg.from_user.id):
-        return await reply(msg, "not_admin")
+    if await deny(msg, bot, "court"):
+        return
     uid, name, _ = await resolve_target(msg)
     if not uid:
         return await reply(msg, "no_target")

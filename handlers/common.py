@@ -5,7 +5,7 @@ from aiogram.types import Message
 from db import db
 from phrases import say, ACHIEVEMENTS
 from config import MASS_PER_THANKS
-from utils import reply, is_admin, mention, split_args, style
+from utils import reply, deny, mention, split_args, style
 
 router = Router()
 
@@ -17,7 +17,7 @@ async def cmd_help(msg: Message):
     await reply(msg, key, n=s["warn_decay_days"])
 
 
-@router.message(Command("thanks"))
+@router.message(Command("thanks", "спасибо", prefix="/!"))
 async def cmd_thanks(msg: Message):
     await db.touch_user(msg.chat.id, msg.from_user)
     await db.add_mass(msg.chat.id, msg.from_user.id, MASS_PER_THANKS)
@@ -28,7 +28,7 @@ async def cmd_thanks(msg: Message):
                     ach=ACHIEVEMENTS["noticed"])
 
 
-@router.message(Command("mood"))
+@router.message(Command("mood", "настроение", prefix="/!"))
 async def cmd_mood(msg: Message):
     m = await db.mood(msg.chat.id)
     st = await style(msg.chat.id)
@@ -36,10 +36,10 @@ async def cmd_mood(msg: Message):
     await reply(msg, "mood", mood=int(m), comment=say(st, comment_key, chat_id=msg.chat.id))
 
 
-@router.message(Command("style"))
+@router.message(Command("style", "стиль", prefix="/!"))
 async def cmd_style(msg: Message, bot: Bot):
-    if not await is_admin(bot, msg.chat.id, msg.from_user.id):
-        return await reply(msg, "not_admin")
+    if await deny(msg, bot, "style"):
+        return
     args = split_args(msg)
     if not args or args[0] not in ("pickme", "strict", "normal"):
         return await msg.answer("/style pickme | strict | normal")
@@ -47,10 +47,10 @@ async def cmd_style(msg: Message, bot: Bot):
     await reply(msg, "style_set", style=args[0])
 
 
-@router.message(Command("settings"))
+@router.message(Command("settings", "настройки", prefix="/!"))
 async def cmd_settings(msg: Message, bot: Bot):
-    if not await is_admin(bot, msg.chat.id, msg.from_user.id):
-        return await reply(msg, "not_admin")
+    if await deny(msg, bot, "settings"):
+        return
     args = split_args(msg)
     s = await db.settings(msg.chat.id)
     if len(args) == 2 and args[0] in s:
@@ -68,8 +68,8 @@ async def cmd_settings(msg: Message, bot: Bot):
 
 @router.message(Command("digest"))
 async def cmd_digest(msg: Message, bot: Bot):
-    if not await is_admin(bot, msg.chat.id, msg.from_user.id):
-        return await reply(msg, "not_admin")
+    if await deny(msg, bot, "digest"):
+        return
     await send_digest(bot, msg.chat.id)
 
 

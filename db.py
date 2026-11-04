@@ -51,6 +51,25 @@ CREATE TABLE IF NOT EXISTS tags (
     chat_id INTEGER, name TEXT, file_id TEXT,
     PRIMARY KEY (chat_id, name)
 );
+CREATE TABLE IF NOT EXISTS marriages (
+    chat_id INTEGER, a INTEGER, b INTEGER, since INTEGER
+);
+CREATE TABLE IF NOT EXISTS crushes (
+    chat_id INTEGER, user_id INTEGER, target_id INTEGER, since INTEGER,
+    PRIMARY KEY (chat_id, user_id)
+);
+CREATE TABLE IF NOT EXISTS sarra_love (
+    chat_id INTEGER, user_id INTEGER, n INTEGER DEFAULT 0,
+    PRIMARY KEY (chat_id, user_id)
+);
+CREATE TABLE IF NOT EXISTS coin_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    chat_id INTEGER, from_user INTEGER, to_user INTEGER, n INTEGER, note TEXT, ts INTEGER, month TEXT
+);
+CREATE TABLE IF NOT EXISTS ranks (
+    chat_id INTEGER, user_id INTEGER, rank INTEGER, by_user INTEGER, set_at INTEGER,
+    PRIMARY KEY (chat_id, user_id)
+);
 CREATE TABLE IF NOT EXISTS custom_phrases (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     chat_id INTEGER, key TEXT, text TEXT
@@ -70,6 +89,10 @@ class DB:
         self.conn = await aiosqlite.connect(self.path)
         self.conn.row_factory = aiosqlite.Row
         await self.conn.executescript(SCHEMA)
+        cur = await self.conn.execute("PRAGMA table_info(users)")
+        cols = [r["name"] for r in await cur.fetchall()]
+        if "nick" not in cols:
+            await self.conn.execute("ALTER TABLE users ADD COLUMN nick TEXT")
         await self.conn.commit()
 
     # ---------- settings ----------
@@ -404,6 +427,120 @@ class DB:
     async def reset_custom_phrases(self, chat_id, key):
         await self.conn.execute("DELETE FROM custom_phrases WHERE chat_id=? AND key=?", (chat_id, key))
         await self.conn.commit()
+
+
+    # ---------- ранги ----------
+    async def rank(self, chat_id, user_id) -> int:
+        cur = await self.conn.execute("SELECT rank FROM ranks WHERE chat_id=? AND user_id=?", (chat_id, user_id))
+        row = await cur.fetchone()
+        return row["rank"] if row else 0
+
+    async def set_rank(self, chat_id, user_id, rank: int, by_user: int):
+        if rank <= 0:
+            await self.conn.execute("DELETE FROM ranks WHERE chat_id=? AND user_id=?", (chat_id, user_id))
+        else:
+            await self.conn.execute(
+                "INSERT INTO ranks VALUES(?,?,?,?,?) ON CONFLICT(chat_id,user_id) DO UPDATE SET rank=excluded.rank, by_user=excluded.by_user, set_at=excluded.set_at",
+                (chat_id, user_id, rank, by_user, int(time.time())))
+        await self.conn.commit()
+
+    async def list_ranks(self, chat_id):
+        cur = await self.conn.execute(
+            "SELECT r.user_id, r.rank, u.first_name FROM ranks r LEFT JOIN users u ON u.chat_id=r.chat_id AND u.user_id=r.user_id "
+            "WHERE r.chat_id=? ORDER BY r.rank DESC, u.first_name", (chat_id,))
+        return await cur.fetchall()
+
+
+    # ---------- ники ----------
+    async def set_nick(self, chat_id, user_id, nick):
+        await self.conn.execute("UPDATE users SET nick=? WHERE chat_id=? AND user_id=?", (nick, chat_id, user_id))
+        await self.conn.commit()
+
+    # ---------- браки ----------
+    async def partner(self, chat_id, user_id):
+        cur = await self.conn.execute(
+            "SELECT a, b FROM marriages WHERE chat_id=? AND (a=? OR b=?)", (chat_id, user_id, user_id))
+        row = await cur.fetchone()
+        if not row:
+            return None
+        return row["b"] if row["a"] == user_id else row["a"]
+
+    async def marriage(self, chat_id, user_id):
+        cur = await self.conn.execute(
+            "SELECT * FROM marriages WHERE chat_id=? AND (a=? OR b=?)", (chat_id, user_id, user_id))
+        return await cur.fetchone()
+
+    async def marry(self, chat_id, a, b):
+        await self.conn.execute("INSERT INTO marriages VALUES(?,?,?,?)", (chat_id, a, b, int(time.time())))
+        await self.conn.commit()
+
+    async def divorce(self, chat_id, user_id):
+        await self.conn.execute("DELETE FROM marriages WHERE chat_id=? AND (a=? OR b=?)", (chat_id, user_id, user_id))
+        await self.conn.commit()
+
+    async def marriages(self, chat_id):
+        cur = await self.conn.execute("SELECT * FROM marriages WHERE chat_id=? ORDER BY since", (chat_id,))
+        return await cur.fetchall()
+
+    # ---------- влюблённости ----------
+    async def crush(self, chat_id, user_id):
+        cur = await self.conn.execute("SELECT target_id FROM crushes WHERE chat_id=? AND user_id=?", (chat_id, user_id))
+        row = await cur.fetchone()
+        return row["target_id"] if row else None
+
+    async def set_crush(self, chat_id, user_id, target_id):
+        if target_id is None:
+            await self.conn.execute("DELETE FROM crushes WHERE chat_id=? AND user_id=?", (chat_id, user_id))
+        else:
+            await self.conn.execute(
+                "INSERT INTO crushes VALUES(?,?,?,?) ON CONFLICT(chat_id,user_id) DO UPDATE SET target_id=excluded.target_id, since=excluded.since",
+                (chat_id, user_id, target_id, int(time.time())))
+        await self.conn.commit()
+
+    async def love_sarra(self, chat_id, user_id) -> int:
+        await self.conn.execute(
+            "INSERT INTO sarra_love VALUES(?,?,1) ON CONFLICT(chat_id,user_id) DO UPDATE SET n=n+1", (chat_id, user_id))
+        await self.conn.commit()
+        cur = await self.conn.execute("SELECT n FROM sarra_love WHERE chat_id=? AND user_id=?", (chat_id, user_id))
+        return (await cur.fetchone())["n"]
+
+
+    # ---------- сарра-коины ----------
+    async def give_coin(self, chat_id, from_user, to_user, note="", n=1):
+        now = int(time.time())
+        await self.conn.execute(
+            "INSERT INTO coin_log(chat_id,from_user,to_user,n,note,ts,month) VALUES(?,?,?,?,?,?,?)",
+            (chat_id, from_user, to_user, n, note, now, time.strftime("%Y-%m", time.localtime(now))))
+        await self.conn.commit()
+
+    async def coins_given_today(self, chat_id, from_user) -> int:
+        since = int(time.time()) - 86400
+        cur = await self.conn.execute(
+            "SELECT COALESCE(SUM(n),0) AS s FROM coin_log WHERE chat_id=? AND from_user=? AND ts>?", (chat_id, from_user, since))
+        return (await cur.fetchone())["s"]
+
+    async def coins_total(self, chat_id, user_id) -> int:
+        cur = await self.conn.execute(
+            "SELECT COALESCE(SUM(n),0) AS s FROM coin_log WHERE chat_id=? AND to_user=?", (chat_id, user_id))
+        return (await cur.fetchone())["s"]
+
+    async def coins_month(self, chat_id, user_id, month) -> int:
+        cur = await self.conn.execute(
+            "SELECT COALESCE(SUM(n),0) AS s FROM coin_log WHERE chat_id=? AND to_user=? AND month=?", (chat_id, user_id, month))
+        return (await cur.fetchone())["s"]
+
+    async def coins_top(self, chat_id, month, limit=10):
+        cur = await self.conn.execute(
+            "SELECT to_user AS user_id, SUM(n) AS n FROM coin_log WHERE chat_id=? AND month=? "
+            "GROUP BY to_user ORDER BY n DESC LIMIT ?", (chat_id, month, limit))
+        return await cur.fetchall()
+
+    async def coins_rank(self, chat_id, user_id, month) -> int:
+        rows = await self.coins_top(chat_id, month, 1000)
+        for i, r in enumerate(rows):
+            if r["user_id"] == user_id:
+                return i + 1
+        return 0
 
 
 db = DB()

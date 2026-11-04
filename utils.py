@@ -65,14 +65,63 @@ def human_duration(seconds: int) -> str:
     return f"{seconds // 60} мин"
 
 
-async def is_admin(bot: Bot, chat_id: int, user_id: int) -> bool:
+# ---------- ранги (как в Ирисе) ----------
+RANK_NAMES = {0: "участник", 1: "модератор", 2: "младший админ", 3: "старший админ", 4: "владелец"}
+RANK_ALIASES = {
+    "0": 0, "участник": 0, "снять": 0, "none": 0,
+    "1": 1, "модер": 1, "модератор": 1, "mod": 1,
+    "2": 2, "мл": 2, "младший": 2, "младшийадмин": 2, "junior": 2,
+    "3": 3, "ст": 3, "старший": 3, "старшийадмин": 3, "senior": 3, "админ": 3, "admin": 3,
+    "4": 4, "владелец": 4, "owner": 4,
+}
+# минимальный ранг для действия
+NEED = {
+    "warn": 1, "unwarn": 1, "mute": 1, "unmute": 1,
+    "kick": 2, "court": 2, "tag": 2, "report_action": 2,
+    "ban": 3, "unban": 3, "settings": 3, "style": 3, "phrase": 3, "digest": 3,
+    "rank": 4,
+}
+MOD_MUTE_MAX = 2 * 3600   # модератор не может мутить дольше 2 часов
+
+
+async def rank_of(bot: Bot, chat_id: int, user_id: int) -> int:
+    """Ранг = максимум из выданного командой и статуса в Telegram (создатель=4, админ=3)."""
     if user_id in OWNER_IDS:
-        return True
+        return 4
+    r = await db.rank(chat_id, user_id)
+    if r >= 4:
+        return r
     try:
         m = await bot.get_chat_member(chat_id, user_id)
-        return m.status in ("administrator", "creator")
+        if m.status == "creator":
+            return 4
+        if m.status == "administrator":
+            return max(r, 3)
     except Exception:
+        pass
+    return r
+
+
+async def has_rank(bot: Bot, chat_id: int, user_id: int, action: str) -> bool:
+    return await rank_of(bot, chat_id, user_id) >= NEED[action]
+
+
+async def is_admin(bot: Bot, chat_id: int, user_id: int) -> bool:
+    """Любой ранг от модератора и выше (для антиспама и т.п.)."""
+    return await rank_of(bot, chat_id, user_id) >= 1
+
+
+async def deny(msg: Message, bot: Bot, action: str) -> bool:
+    """True, если прав не хватает (и уже ответил)."""
+    have = await rank_of(bot, msg.chat.id, msg.from_user.id)
+    if have >= NEED[action]:
         return False
+    await reply(msg, "no_rank", need=rank_name(NEED[action]), have=rank_name(have))
+    return True
+
+
+def rank_name(r: int) -> str:
+    return RANK_NAMES.get(r, str(r))
 
 
 async def style(chat_id: int) -> str:
