@@ -21,6 +21,7 @@ DEFAULT_SETTINGS = {
     "newbie_hours": 12,       # новичкам без медиа при рейде
     "court_minutes": 10,
     "max_spouses": 4,         # сколько браков может быть у одного человека
+    "talaq_men_only": 1,      # 1 — тройной «развод» работает только если пол не «ж»
     "report_chat": 0,         # id чата для жалоб /report (0 — брать REPORT_CHAT_ID из .env)
     "matfilter": 1,           # 1/0 — фильтр мата
     "mat_soft": 1,            # 1 — мягкий режим (предупреждает), 0 — удаляет

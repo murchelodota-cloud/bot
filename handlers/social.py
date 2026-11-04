@@ -1,5 +1,6 @@
 """Социалка через «+»: +ник, +брак, +развод, +пара, +браки, +влюблен, +люблю сарру."""
 import html
+import re
 import time
 from aiogram import Router, Bot, F
 from aiogram.filters import Command
@@ -189,17 +190,63 @@ async def cmd_divorce_force(msg: Message, bot: Bot):
 
 @router.message(Command("развод", "divorce", prefix="+/!"))
 async def cmd_divorce(msg: Message):
-    """+развод — расторгнуть брак; при многожёнстве: +развод @юзер (или ответом) — с кем именно."""
-    chat_id = msg.chat.id
-    ps = await db.partners(chat_id, msg.from_user.id)
+    """+развод — больше не разводит сам: объясняет правило (три раза «развод») или шлёт к админу."""
+    ps = await db.partners(msg.chat.id, msg.from_user.id)
     if not ps:
         return await reply(msg, "no_partner")
-    uid, name, _ = await resolve_target(msg)
-    if len(ps) > 1 and (not uid or uid not in ps):
-        return await reply(msg, "divorce_which", list=", ".join([await m(chat_id, p) for p in ps]))
-    other = uid if uid in ps else ps[0]
-    await db.divorce(chat_id, msg.from_user.id, other)
-    await reply(msg, "divorce", user=await m(chat_id, msg.from_user.id, msg.from_user.first_name), target=await m(chat_id, other))
+    await reply(msg, "divorce_rule", user=await m(msg.chat.id, msg.from_user.id, msg.from_user.first_name))
+
+
+_talaq: dict[tuple[int, int], list[float]] = {}   # (chat, user) -> отметки времени слов «развод»
+TALAQ_WINDOW = 600
+
+
+@router.message(F.text.regexp(r"^\s*развод[!.…\s]*$", flags=re.I))
+async def on_talaq(msg: Message):
+    """Три раза «развод» отдельными сообщениями за 10 минут — брак расторгнут."""
+    chat_id, uid = msg.chat.id, msg.from_user.id
+    ps = await db.partners(chat_id, uid)
+    if not ps:
+        return
+    s = await db.settings(chat_id)
+    row = await db.user(chat_id, uid)
+    if s.get("talaq_men_only", 1) and row and row["gender"] == "ж":
+        return await reply(msg, "divorce_not_husband", user=await m(chat_id, uid, msg.from_user.first_name))
+    now = time.time()
+    stamps = [x for x in _talaq.get((chat_id, uid), []) if now - x < TALAQ_WINDOW] + [now]
+    _talaq[(chat_id, uid)] = stamps
+    n = len(stamps)
+    me = await m(chat_id, uid, msg.from_user.first_name)
+    if n == 1:
+        return await reply(msg, "divorce_1", user=me)
+    if n == 2:
+        return await reply(msg, "divorce_2", user=me)
+    _talaq.pop((chat_id, uid), None)
+    if len(ps) == 1:
+        await db.divorce(chat_id, uid, ps[0])
+        return await reply(msg, "divorce_3", user=me, target=await m(chat_id, ps[0]))
+    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text=(await name_of(chat_id, p))[:30],
+                                                                      callback_data=f"talaq:{uid}:{p}")] for p in ps])
+    sent = await msg.answer(say(await style(chat_id), "divorce_which", chat_id=chat_id,
+                                list=", ".join([await m(chat_id, p) for p in ps])), reply_markup=kb)
+    await db.remember_bot_message(chat_id, sent.message_id)
+
+
+@router.callback_query(F.data.startswith("talaq:"))
+async def on_talaq_pick(cb: CallbackQuery):
+    _, uid, p = cb.data.split(":")
+    uid, p = int(uid), int(p)
+    chat_id = cb.message.chat.id
+    if cb.from_user.id != uid:
+        return await cb.answer("не твой развод. не лезь.", show_alert=True)
+    if not await db.marriage_with(chat_id, uid, p):
+        return await cb.answer("этого брака уже нет.", show_alert=True)
+    await db.divorce(chat_id, uid, p)
+    try:
+        await cb.message.edit_text(say(await style(chat_id), "divorce_3", chat_id=chat_id, user=await m(chat_id, uid), target=await m(chat_id, p)))
+    except TelegramBadRequest:
+        pass
+    await cb.answer()
 
 
 @router.message(Command("пара", "partner", prefix="+/!"))

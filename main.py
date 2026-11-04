@@ -12,6 +12,9 @@ import phrases
 from handlers.extras import fire_due_reminders, send_qotd, qotd_due
 from handlers.coins import month_results, month_results_due, mark_month_awarded
 from handlers.iris import birthday_check
+from handlers.royal import royal_tick
+from handlers.nominations import nominations_close
+from handlers.quotes import quote_tick
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 
@@ -27,11 +30,22 @@ async def digest_loop(bot: Bot):
                 if await qotd_due(bot, chat_id):
                     await send_qotd(bot, chat_id)
                 await birthday_check(bot, chat_id)
+                await royal_tick(bot, chat_id)
+                await nominations_close(bot, chat_id)
                 if await month_results_due(chat_id):
                     await mark_month_awarded(chat_id)
                     await month_results(bot, chat_id)
             except Exception as e:  # чат мог удалить бота
                 logging.warning("digest/qotd %s: %s", chat_id, e)
+
+
+async def quote_loop(bot: Bot):
+    while True:
+        await asyncio.sleep(60)
+        try:
+            await quote_tick(bot)
+        except Exception as e:
+            logging.warning("quotes: %s", e)
 
 
 async def reminder_loop(bot: Bot):
@@ -53,6 +67,7 @@ async def main():
     dp.include_routers(*routers)
     asyncio.create_task(digest_loop(bot))
     asyncio.create_task(reminder_loop(bot))
+    asyncio.create_task(quote_loop(bot))
     # message_reaction и chat_member не приходят по умолчанию — просим явно
     allowed = dp.resolve_used_update_types() + ["message_reaction", "chat_member"]
     logging.info("Саррочка запускается. никто не заметит, но запускается.")

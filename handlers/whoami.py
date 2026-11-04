@@ -134,6 +134,9 @@ async def build_card(bot: Bot, chat_id: int, uid: int, fallback_name: str | None
     ]
     if warns:
         lines.append(f"⚠️ Активных предов: {warns}")
+    ds = await db.duel_stats(chat_id, uid)
+    if ds and (ds["wins"] or ds["losses"]):
+        lines.append(f"⚔️ Дуэли: {ds['wins']} побед / {ds['losses']} поражений" + (f" / {ds['cowards']} 🏳️" if ds["cowards"] else ""))
     rel = []
     for partner in partners:
         p = await db.user(chat_id, partner)

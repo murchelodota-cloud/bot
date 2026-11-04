@@ -24,6 +24,11 @@ class MassMiddleware(BaseMiddleware):
             await db.add_mass(event.chat.id, event.from_user.id, MASS_PER_MESSAGE, daily_cap=MASS_DAILY_CAP)
             msgs = await db.inc_msgs(event.chat.id, event.from_user.id)
             await db.bump_daily(event.chat.id, event.from_user.id)
+            await db.log_msg(event.chat.id, event.from_user.id)
+            from handlers.quotes import note_activity
+            note_activity(event.chat.id)
+            from handlers.nominations import analyze
+            await analyze(event)
             await check_achievements(event, row, msgs)
             if msgs % 500 == 0:
                 s = await db.settings(event.chat.id)

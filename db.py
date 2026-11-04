@@ -85,6 +85,22 @@ CREATE TABLE IF NOT EXISTS bans (
     chat_id INTEGER, user_id INTEGER, by_user INTEGER, reason TEXT, ts INTEGER,
     PRIMARY KEY (chat_id, user_id)
 );
+CREATE TABLE IF NOT EXISTS duels (
+    chat_id INTEGER, user_id INTEGER, wins INTEGER DEFAULT 0, losses INTEGER DEFAULT 0, cowards INTEGER DEFAULT 0,
+    PRIMARY KEY (chat_id, user_id)
+);
+CREATE TABLE IF NOT EXISTS msg_log (
+    chat_id INTEGER, user_id INTEGER, ts INTEGER
+);
+CREATE INDEX IF NOT EXISTS msg_log_idx ON msg_log(chat_id, ts);
+CREATE TABLE IF NOT EXISTS royal_votes (
+    chat_id INTEGER, day TEXT, kind TEXT, voter INTEGER, cand INTEGER,
+    PRIMARY KEY (chat_id, day, kind, voter)
+);
+CREATE TABLE IF NOT EXISTS nominations (
+    chat_id INTEGER, day TEXT, user_id INTEGER, kind TEXT, n INTEGER DEFAULT 0,
+    PRIMARY KEY (chat_id, day, user_id, kind)
+);
 CREATE TABLE IF NOT EXISTS ranks (
     chat_id INTEGER, user_id INTEGER, rank INTEGER, by_user INTEGER, set_at INTEGER,
     PRIMARY KEY (chat_id, user_id)
@@ -757,6 +773,90 @@ class DB:
     async def birthdays_today(self, chat_id, ddmm: str):
         cur = await self.conn.execute(
             "SELECT * FROM users WHERE chat_id=? AND birthday LIKE ?", (chat_id, ddmm + "%"))
+        return await cur.fetchall()
+
+
+    # ---------- дуэли ----------
+    async def duel_result(self, chat_id, winner, loser, coward=False) -> tuple[int, int]:
+        """Возвращает (победы победителя, поражения проигравшего). coward=True — loser струсил."""
+        for uid in (winner, loser):
+            await self.conn.execute("INSERT OR IGNORE INTO duels(chat_id,user_id) VALUES(?,?)", (chat_id, uid))
+        if coward:
+            await self.conn.execute("UPDATE duels SET cowards=cowards+1 WHERE chat_id=? AND user_id=?", (chat_id, loser))
+        else:
+            await self.conn.execute("UPDATE duels SET wins=wins+1 WHERE chat_id=? AND user_id=?", (chat_id, winner))
+            await self.conn.execute("UPDATE duels SET losses=losses+1 WHERE chat_id=? AND user_id=?", (chat_id, loser))
+        await self.conn.commit()
+        cur = await self.conn.execute("SELECT wins FROM duels WHERE chat_id=? AND user_id=?", (chat_id, winner))
+        w = (await cur.fetchone())["wins"]
+        cur = await self.conn.execute("SELECT losses FROM duels WHERE chat_id=? AND user_id=?", (chat_id, loser))
+        return w, (await cur.fetchone())["losses"]
+
+    async def duel_stats(self, chat_id, user_id):
+        cur = await self.conn.execute("SELECT * FROM duels WHERE chat_id=? AND user_id=?", (chat_id, user_id))
+        return await cur.fetchone()
+
+    async def duel_top(self, chat_id, limit=10):
+        cur = await self.conn.execute(
+            "SELECT * FROM duels WHERE chat_id=? AND (wins>0 OR losses>0 OR cowards>0) ORDER BY wins DESC, losses ASC LIMIT ?", (chat_id, limit))
+        return await cur.fetchall()
+
+
+    # ---------- лог сообщений (для сводок) ----------
+    async def log_msg(self, chat_id, user_id):
+        now = int(time.time())
+        await self.conn.execute("INSERT INTO msg_log VALUES(?,?,?)", (chat_id, user_id, now))
+        if now % 97 == 0:  # изредка чистим старше 8 дней
+            await self.conn.execute("DELETE FROM msg_log WHERE ts<?", (now - 8 * 86400,))
+        await self.conn.commit()
+
+    async def summary_stats(self, chat_id, since) -> dict:
+        async def one(sql, *p):
+            cur = await self.conn.execute(sql, p)
+            return (await cur.fetchone())[0] or 0
+        return {
+            "msgs": await one("SELECT COUNT(*) FROM msg_log WHERE chat_id=? AND ts>?", chat_id, since),
+            "users": await one("SELECT COUNT(DISTINCT user_id) FROM msg_log WHERE chat_id=? AND ts>?", chat_id, since),
+            "warns": await one("SELECT COUNT(*) FROM warns WHERE chat_id=? AND created_at>?", chat_id, since),
+            "bans": await one("SELECT COUNT(*) FROM bans WHERE chat_id=? AND ts>?", chat_id, since),
+            "joins": await one("SELECT COUNT(*) FROM users WHERE chat_id=? AND joined_at>?", chat_id, since),
+            "coins": await one("SELECT COALESCE(SUM(n),0) FROM coin_log WHERE chat_id=? AND ts>? AND n>0", chat_id, since),
+            "marriages": await one("SELECT COUNT(*) FROM marriages WHERE chat_id=? AND since>?", chat_id, since),
+        }
+
+    async def summary_top(self, chat_id, since, limit=3):
+        cur = await self.conn.execute(
+            "SELECT user_id, COUNT(*) AS n FROM msg_log WHERE chat_id=? AND ts>? GROUP BY user_id ORDER BY n DESC LIMIT ?",
+            (chat_id, since, limit))
+        return await cur.fetchall()
+
+    # ---------- король/королева ----------
+    async def royal_vote(self, chat_id, day, kind, voter, cand):
+        await self.conn.execute(
+            "INSERT INTO royal_votes VALUES(?,?,?,?,?) ON CONFLICT(chat_id,day,kind,voter) DO UPDATE SET cand=excluded.cand",
+            (chat_id, day, kind, voter, cand))
+        await self.conn.commit()
+
+    async def royal_counts(self, chat_id, day, kind) -> dict:
+        cur = await self.conn.execute(
+            "SELECT cand, COUNT(*) AS n FROM royal_votes WHERE chat_id=? AND day=? AND kind=? GROUP BY cand", (chat_id, day, kind))
+        return {r["cand"]: r["n"] for r in await cur.fetchall()}
+
+    async def royal_clear(self, chat_id, day):
+        await self.conn.execute("DELETE FROM royal_votes WHERE chat_id=? AND day=?", (chat_id, day))
+        await self.conn.commit()
+
+
+    # ---------- рубрики дня ----------
+    async def nom_add(self, chat_id, day, user_id, kind, n=1):
+        await self.conn.execute(
+            "INSERT INTO nominations VALUES(?,?,?,?,?) ON CONFLICT(chat_id,day,user_id,kind) DO UPDATE SET n=n+excluded.n",
+            (chat_id, day, user_id, kind, n))
+        await self.conn.commit()
+
+    async def nom_top(self, chat_id, day, kind, limit=3):
+        cur = await self.conn.execute(
+            "SELECT user_id, n FROM nominations WHERE chat_id=? AND day=? AND kind=? ORDER BY n DESC LIMIT ?", (chat_id, day, kind, limit))
         return await cur.fetchall()
 
 
