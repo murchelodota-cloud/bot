@@ -25,6 +25,7 @@ DEFAULT_SETTINGS = {
     "report_chat": 0,         # id чата для жалоб /report (0 — брать REPORT_CHAT_ID из .env)
     "matfilter": 1,           # 1/0 — фильтр мата
     "mat_soft": 1,            # 1 — мягкий режим (предупреждает), 0 — удаляет
+    "mat_admins": 1,          # 1 — админам тоже делать замечание за мат (без удаления)
     "dupfilter": 1,           # 1/0 — резать одинаковые сообщения подряд
     "qotd": 1,                # 1/0 — вопрос дня
     "welcome": 1,             # 1/0 — приветствовать новичков
@@ -47,6 +48,11 @@ MASS_PER_THANKS = 2
 
 if not BOT_TOKEN:
     raise SystemExit("Заполни BOT_TOKEN в .env (см. .env.example)")
+
+# Языковая модель для связных сводок (любой OpenAI-совместимый API). Без ключа — сводка по ключевым словам.
+LLM_API_KEY = os.getenv("LLM_API_KEY", "")
+LLM_BASE_URL = os.getenv("LLM_BASE_URL", "https://api.openai.com/v1").rstrip("/")
+LLM_MODEL = os.getenv("LLM_MODEL", "gpt-4o-mini")
 
 # Музыка
 MUSIC_MAX_MINUTES = 12            # треки длиннее не качаем

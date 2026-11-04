@@ -90,7 +90,7 @@ CREATE TABLE IF NOT EXISTS duels (
     PRIMARY KEY (chat_id, user_id)
 );
 CREATE TABLE IF NOT EXISTS msg_log (
-    chat_id INTEGER, user_id INTEGER, ts INTEGER
+    chat_id INTEGER, user_id INTEGER, ts INTEGER, text TEXT, msg_id INTEGER, reply_to INTEGER, has_media INTEGER DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS msg_log_idx ON msg_log(chat_id, ts);
 CREATE TABLE IF NOT EXISTS royal_votes (
@@ -101,6 +101,11 @@ CREATE TABLE IF NOT EXISTS nominations (
     chat_id INTEGER, day TEXT, user_id INTEGER, kind TEXT, n INTEGER DEFAULT 0,
     PRIMARY KEY (chat_id, day, user_id, kind)
 );
+CREATE TABLE IF NOT EXISTS events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    chat_id INTEGER, ts INTEGER, kind TEXT, text TEXT
+);
+CREATE INDEX IF NOT EXISTS events_idx ON events(chat_id, ts);
 CREATE TABLE IF NOT EXISTS ranks (
     chat_id INTEGER, user_id INTEGER, rank INTEGER, by_user INTEGER, set_at INTEGER,
     PRIMARY KEY (chat_id, user_id)
@@ -133,6 +138,11 @@ class DB:
         for col in ("title", "gender", "city", "birthday"):
             if col not in cols:
                 await self.conn.execute(f"ALTER TABLE users ADD COLUMN {col} TEXT")
+        cur = await self.conn.execute("PRAGMA table_info(msg_log)")
+        mcols = [r["name"] for r in await cur.fetchall()]
+        for col, typ in (("text", "TEXT"), ("msg_id", "INTEGER"), ("reply_to", "INTEGER"), ("has_media", "INTEGER DEFAULT 0")):
+            if col not in mcols:
+                await self.conn.execute(f"ALTER TABLE msg_log ADD COLUMN {col} {typ}")
         cur = await self.conn.execute("PRAGMA table_info(marriages)")
         if "kind" not in [r["name"] for r in await cur.fetchall()]:
             await self.conn.execute("ALTER TABLE marriages ADD COLUMN kind TEXT")
@@ -803,9 +813,11 @@ class DB:
 
 
     # ---------- лог сообщений (для сводок) ----------
-    async def log_msg(self, chat_id, user_id):
+    async def log_msg(self, chat_id, user_id, text="", msg_id=None, reply_to=None, has_media=0):
         now = int(time.time())
-        await self.conn.execute("INSERT INTO msg_log VALUES(?,?,?)", (chat_id, user_id, now))
+        await self.conn.execute(
+            "INSERT INTO msg_log(chat_id,user_id,ts,text,msg_id,reply_to,has_media) VALUES(?,?,?,?,?,?,?)",
+            (chat_id, user_id, now, (text or "")[:500], msg_id, reply_to, has_media))
         if now % 97 == 0:  # изредка чистим старше 8 дней
             await self.conn.execute("DELETE FROM msg_log WHERE ts<?", (now - 8 * 86400,))
         await self.conn.commit()
@@ -858,6 +870,27 @@ class DB:
         cur = await self.conn.execute(
             "SELECT user_id, n FROM nominations WHERE chat_id=? AND day=? AND kind=? ORDER BY n DESC LIMIT ?", (chat_id, day, kind, limit))
         return await cur.fetchall()
+
+
+    # ---------- журнал событий (для сводок) ----------
+    async def log_event(self, chat_id, kind, text):
+        now = int(time.time())
+        await self.conn.execute("INSERT INTO events(chat_id,ts,kind,text) VALUES(?,?,?,?)", (chat_id, now, kind, text[:300]))
+        await self.conn.execute("DELETE FROM events WHERE ts<?", (now - 10 * 86400,))
+        await self.conn.commit()
+
+    async def events(self, chat_id, since, limit=60):
+        cur = await self.conn.execute(
+            "SELECT * FROM events WHERE chat_id=? AND ts>? ORDER BY ts DESC LIMIT ?", (chat_id, since, limit))
+        return list(reversed(await cur.fetchall()))
+
+
+    async def messages_since(self, chat_id, since, limit=600):
+        cur = await self.conn.execute(
+            "SELECT m.user_id, m.ts, m.text, m.msg_id, m.reply_to, m.has_media, u.first_name, u.nick FROM msg_log m "
+            "LEFT JOIN users u ON u.chat_id=m.chat_id AND u.user_id=m.user_id "
+            "WHERE m.chat_id=? AND m.ts>? ORDER BY m.ts DESC LIMIT ?", (chat_id, since, limit))
+        return list(reversed(await cur.fetchall()))
 
 
 db = DB()

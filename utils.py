@@ -177,4 +177,5 @@ async def check_achievements(msg: Message, user_row, msgs: int):
         got.append("heavy")
     from phrases import ACHIEVEMENTS
     for key in got:
+        await db.log_event(chat_id, "ach", f"🏅 {mention(uid, user_row['first_name'])} — ачивка «{ACHIEVEMENTS[key]}»")
         await reply(msg, "achievement", user=mention(uid, user_row["first_name"]), ach=ACHIEVEMENTS[key])
