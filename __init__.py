@@ -18,6 +18,8 @@ from .summary import router as summary_router
 from .images import router as images_router
 from .nominations import router as nominations_router
 from .rewards import router as rewards_router
+from .fun import router as fun_router
+from .judge import router as judge_router
 
 # antispam последним: он перехватывает все текстовые сообщения
-routers = [iris_router, common_router, moderation_router, court_router, profile_router, extras_router, images_router, music_router, phrases_router, social_router, coins_router, whoami_router, video_router, duel_router, royal_router, quotes_router, summary_router, nominations_router, rewards_router, badwords_router, antispam_router]
+routers = [judge_router, iris_router, common_router, moderation_router, court_router, profile_router, extras_router, images_router, music_router, phrases_router, social_router, coins_router, whoami_router, video_router, duel_router, royal_router, quotes_router, summary_router, nominations_router, rewards_router, fun_router, badwords_router, antispam_router]

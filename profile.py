@@ -86,7 +86,8 @@ async def on_reaction(event: MessageReactionUpdated):
         row = await db.touch_user(chat_id, event.user)
         await db.add_mass(chat_id, event.user.id, MASS_PER_BOT_REACTION)
         await db.bump_mood(chat_id, 5)
-        if await style(chat_id) == "pickme":
+        s = await db.settings(chat_id)
+        if s.get("reaction_notify", 0) and await style(chat_id) == "pickme":
             sent = await event.bot.send_message(
                 chat_id, say("pickme", "bot_reaction", chat_id=chat_id, user=mention(event.user.id, event.user.first_name)))
             await db.remember_bot_message(chat_id, sent.message_id)

@@ -4,3 +4,4 @@ python-dotenv>=1.0
 yt-dlp>=2025.1
 matplotlib>=3.8
 ddgs>=9.0
+shazamio>=0.7

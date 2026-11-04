@@ -893,4 +893,10 @@ class DB:
         return list(reversed(await cur.fetchall()))
 
 
+    async def user_messages(self, chat_id, user_id, limit=300):
+        cur = await self.conn.execute(
+            "SELECT ts, text FROM msg_log WHERE chat_id=? AND user_id=? AND text!='' ORDER BY ts DESC LIMIT ?", (chat_id, user_id, limit))
+        return list(reversed(await cur.fetchall()))
+
+
 db = DB()
