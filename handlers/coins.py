@@ -26,7 +26,7 @@ async def nm(chat_id: int, uid: int, fallback: str | None = None) -> str:
     return mention(uid, name or fallback)
 
 
-@router.message(Command("похвала", "похвалить", "коин", "коины+", "респект", "coin", "praise", prefix="+/!"))
+@router.message(Command("похвала", "похвалить", "коин", "саррокоин", "сарракоин", "респект", "coin", "praise", prefix="+/!"))
 async def cmd_praise(msg: Message, bot: Bot):
     """+похвала [N] [причина] — ответом. Только владелец чата (ранг 4). По умолчанию 1 коин."""
     chat_id = msg.chat.id
@@ -51,6 +51,20 @@ async def cmd_praise(msg: Message, bot: Bot):
     await reply(msg, "coin_given", user=me, target=target, n=n, total=total)
     if total >= 50 and await db.give_achievement(chat_id, uid, "coins50"):
         await reply(msg, "achievement", user=target, ach=ACHIEVEMENTS["coins50"])
+
+
+@router.message(Command("сарра", "сара", prefix="+/!"))
+async def cmd_sarra(msg: Message, bot: Bot):
+    """+сарра коин 5 (ответом) == +похвала 5; +сарра коины == баланс."""
+    args = split_args(msg)
+    if not args:
+        return await reply(msg, "coin_usage")
+    sub = args[0].lower()
+    if sub in ("коин", "coin", "похвала"):
+        return await cmd_praise(msg.model_copy(update={"text": "+похвала " + " ".join(args[1:])}), bot)
+    if sub in ("коины", "баланс", "coins"):
+        return await cmd_coins(msg.model_copy(update={"text": "+коины " + " ".join(args[1:])}))
+    await reply(msg, "coin_usage")
 
 
 @router.message(Command("штраф", "забрать", "fine", prefix="+/!"))

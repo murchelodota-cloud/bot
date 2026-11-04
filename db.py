@@ -66,6 +66,14 @@ CREATE TABLE IF NOT EXISTS coin_log (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     chat_id INTEGER, from_user INTEGER, to_user INTEGER, n INTEGER, note TEXT, ts INTEGER, month TEXT
 );
+CREATE TABLE IF NOT EXISTS badwords (
+    chat_id INTEGER, word TEXT,
+    PRIMARY KEY (chat_id, word)
+);
+CREATE TABLE IF NOT EXISTS daily_activity (
+    chat_id INTEGER, user_id INTEGER, day TEXT, n INTEGER DEFAULT 0,
+    PRIMARY KEY (chat_id, user_id, day)
+);
 CREATE TABLE IF NOT EXISTS ranks (
     chat_id INTEGER, user_id INTEGER, rank INTEGER, by_user INTEGER, set_at INTEGER,
     PRIMARY KEY (chat_id, user_id)
@@ -93,6 +101,8 @@ class DB:
         cols = [r["name"] for r in await cur.fetchall()]
         if "nick" not in cols:
             await self.conn.execute("ALTER TABLE users ADD COLUMN nick TEXT")
+        if "bio" not in cols:
+            await self.conn.execute("ALTER TABLE users ADD COLUMN bio TEXT")
         await self.conn.commit()
 
     # ---------- settings ----------
@@ -541,6 +551,56 @@ class DB:
             if r["user_id"] == user_id:
                 return i + 1
         return 0
+
+
+    # ---------- запретные слова ----------
+    async def badwords(self, chat_id) -> list[str]:
+        cur = await self.conn.execute("SELECT word FROM badwords WHERE chat_id=? ORDER BY word", (chat_id,))
+        return [r["word"] for r in await cur.fetchall()]
+
+    async def add_badword(self, chat_id, word) -> bool:
+        cur = await self.conn.execute("INSERT OR IGNORE INTO badwords VALUES(?,?)", (chat_id, word))
+        await self.conn.commit()
+        return cur.rowcount > 0
+
+    async def del_badword(self, chat_id, word) -> bool:
+        cur = await self.conn.execute("DELETE FROM badwords WHERE chat_id=? AND word=?", (chat_id, word))
+        await self.conn.commit()
+        return cur.rowcount > 0
+
+    async def clear_badwords(self, chat_id):
+        await self.conn.execute("DELETE FROM badwords WHERE chat_id=?", (chat_id,))
+        await self.conn.commit()
+
+
+    # ---------- активность по дням / описание ----------
+    async def bump_daily(self, chat_id, user_id):
+        day = time.strftime("%Y-%m-%d")
+        await self.conn.execute(
+            "INSERT INTO daily_activity VALUES(?,?,?,1) ON CONFLICT(chat_id,user_id,day) DO UPDATE SET n=n+1",
+            (chat_id, user_id, day))
+        await self.conn.commit()
+
+    async def activity(self, chat_id, user_id) -> dict:
+        now = time.time()
+        res = {}
+        for key, days in (("day", 1), ("week", 7), ("month", 30)):
+            since = time.strftime("%Y-%m-%d", time.localtime(now - (days - 1) * 86400))
+            cur = await self.conn.execute(
+                "SELECT COALESCE(SUM(n),0) AS s FROM daily_activity WHERE chat_id=? AND user_id=? AND day>=?",
+                (chat_id, user_id, since))
+            res[key] = (await cur.fetchone())["s"]
+        return res
+
+    async def activity_series(self, chat_id, user_id, days=365) -> dict:
+        since = time.strftime("%Y-%m-%d", time.localtime(time.time() - days * 86400))
+        cur = await self.conn.execute(
+            "SELECT day, n FROM daily_activity WHERE chat_id=? AND user_id=? AND day>=?", (chat_id, user_id, since))
+        return {r["day"]: r["n"] for r in await cur.fetchall()}
+
+    async def set_bio(self, chat_id, user_id, bio):
+        await self.conn.execute("UPDATE users SET bio=? WHERE chat_id=? AND user_id=?", (bio, chat_id, user_id))
+        await self.conn.commit()
 
 
 db = DB()

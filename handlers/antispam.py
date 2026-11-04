@@ -1,6 +1,7 @@
 """Антифлуд, антиссылки для новичков, антирейд с капчей."""
 import time
 import re
+import html
 from collections import defaultdict, deque
 from aiogram import Router, Bot, F
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, ChatMemberUpdated
@@ -13,11 +14,22 @@ from utils import reply, is_admin, mention, MUTE_PERMS, FULL_PERMS, NEWBIE_PERMS
 router = Router()
 
 LINK_RE = re.compile(r"(https?://|t\.me/|@\w{5,}|www\.)", re.I)
-MAT_RE = re.compile(
-    r"\b(хуй|хуя|хуе|хуё|хую|пизд|пидор|пидар|блядь|бляди|блять|сука|суки|суке|"
-    r"ебал|ебёт|ебет|ебут|ебан|заеб|ёбан|мудак|мудил|гандон|шлюх)\w*",
-    re.I,
-)
+DEFAULT_BAD = ["хуй", "хуя", "хуе", "хуё", "хую", "пизд", "пидор", "пидар", "блядь", "бляди", "блять",
+               "сука", "суки", "суке", "ебал", "ебёт", "ебет", "ебут", "ебан", "заеб", "ёбан", "мудак", "мудил",
+               "гандон", "шлюх"]
+MAT_RE = re.compile(r"\b(" + "|".join(DEFAULT_BAD) + r")\w*", re.I)
+_custom_re: dict[int, re.Pattern | None] = {}   # кэш регулярок для своих слов по чатам
+
+
+async def custom_bad_re(chat_id: int) -> re.Pattern | None:
+    if chat_id not in _custom_re:
+        words = await db.badwords(chat_id)
+        _custom_re[chat_id] = re.compile(r"\b(" + "|".join(map(re.escape, words)) + r")\w*", re.I) if words else None
+    return _custom_re[chat_id]
+
+
+def invalidate_bad(chat_id: int):
+    _custom_re.pop(chat_id, None)
 _recent: dict[tuple[int, int], deque] = defaultdict(lambda: deque(maxlen=6))   # флуд
 _joins: dict[int, deque] = defaultdict(lambda: deque(maxlen=50))               # вступления
 _raid_until: dict[int, float] = {}                                              # chat -> ts
@@ -37,6 +49,11 @@ async def on_join(event: ChatMemberUpdated, bot: Bot):
         return
     await db.touch_user(chat_id, user)
     s = await db.settings(chat_id)
+    if s.get("welcome", 1) and not raid_active(chat_id):
+        st = await style(chat_id)
+        m = await bot.send_message(chat_id, say(st, "welcome", chat_id=chat_id, user=mention(user.id, user.first_name),
+                                                chat=html.escape(event.chat.title or "чат")))
+        await db.remember_bot_message(chat_id, m.message_id)
     if not s["antiraid"]:
         return
     now = time.time()
@@ -129,7 +146,8 @@ async def on_message(msg: Message, bot: Bot):
             return
 
     # мат: мягкий режим — предупреждаем, жёсткий — удаляем
-    if s["matfilter"] and MAT_RE.search(text):
+    cre = await custom_bad_re(msg.chat.id)
+    if s["matfilter"] and (MAT_RE.search(text) or (cre and cre.search(text))):
         if s["mat_soft"]:
             m = await bot.send_message(msg.chat.id, say(st, "mat_soft", chat_id=msg.chat.id, user=user_mention))
             await db.remember_bot_message(msg.chat.id, m.message_id)
@@ -152,3 +170,45 @@ async def on_message(msg: Message, bot: Bot):
             return
         m = await bot.send_message(msg.chat.id, say(st, "spam_deleted", chat_id=msg.chat.id, user=user_mention))
         await db.remember_bot_message(msg.chat.id, m.message_id)
+
+
+# ---------- управление запретными словами ----------
+from aiogram.filters import Command
+from utils import deny
+
+badwords_router = Router()   # отдельный роутер: должен стоять ДО антиспама, иначе его перехватит общий хендлер
+
+
+@badwords_router.message(Command("запретки", "badwords", "матслова", prefix="/!+"))
+async def cmd_badwords(msg: Message, bot: Bot):
+    custom = await db.badwords(msg.chat.id)
+    s = await db.settings(msg.chat.id)
+    text = (f"встроенный список (корни слов, {len(DEFAULT_BAD)} шт.): " + ", ".join(DEFAULT_BAD) +
+            "\n\nсвои слова чата: " + (", ".join(html.escape(w) for w in custom) if custom else "пока нет") +
+            f"\n\nфильтр: {'вкл' if s['matfilter'] else 'выкл'}, режим: {'мягкий (предупреждаю)' if s['mat_soft'] else 'жёсткий (удаляю)'}"
+            "\n\n!запретка добавить слово · !запретка удалить слово · !запретка очистить · "
+            "/settings matfilter 0|1 · /settings mat_soft 0|1")
+    await msg.answer(text, disable_web_page_preview=True)
+
+
+@badwords_router.message(Command("запретка", "badword", prefix="/!+"))
+async def cmd_badword(msg: Message, bot: Bot):
+    if await deny(msg, bot, "settings"):
+        return
+    args = (msg.text or "").split()[1:]
+    if len(args) < 1:
+        return await msg.answer("!запретка добавить слово · !запретка удалить слово · !запретка очистить")
+    action = args[0].lower()
+    word = " ".join(args[1:]).lower().strip()
+    if action in ("очистить", "clear", "сброс"):
+        await db.clear_badwords(msg.chat.id); invalidate_bad(msg.chat.id)
+        return await msg.answer("свои запретки стёрла. встроенные остались, их я не отдаю.")
+    if not word or len(word) < 2:
+        return await msg.answer("слово-то какое? минимум 2 буквы.")
+    if action in ("добавить", "add", "+"):
+        ok = await db.add_badword(msg.chat.id, word); invalidate_bad(msg.chat.id)
+        return await msg.answer(f"«{html.escape(word)}» " + ("теперь под запретом. буду следить. я всегда слежу." if ok else "уже в списке."))
+    if action in ("удалить", "del", "-"):
+        ok = await db.del_badword(msg.chat.id, word); invalidate_bad(msg.chat.id)
+        return await msg.answer(f"«{html.escape(word)}» " + ("убрала из запретных. можно. но осторожно." if ok else "и не было в списке."))
+    await msg.answer("!запретка добавить слово · !запретка удалить слово · !запретка очистить")

@@ -112,21 +112,70 @@ async def cmd_partner(msg: Message):
     if not p:
         return await reply(msg, "partner_none", user=await m(chat_id, uid, name))
     row = await db.marriage(chat_id, uid)
-    days = (int(time.time()) - row["since"]) // 86400
-    await reply(msg, "partner_show", user=await m(chat_id, uid, name), target=await m(chat_id, p), days=days)
+    await reply(msg, "partner_show", user=await m(chat_id, uid, name), target=await m(chat_id, p),
+                days=duration(int(time.time()) - row["since"]))
+
+
+WEDDINGS = [  # (минимум лет, эмодзи, название)
+    (0, "🫶", "Молодожёны"), (1, "🤍", "Ситцевая свадьба"), (2, "🧻", "Бумажная свадьба"), (3, "👞", "Кожаная свадьба"),
+    (4, "🧵", "Льняная свадьба"), (5, "🪵", "Деревянная свадьба"), (6, "⚙️", "Чугунная свадьба"), (7, "🥉", "Медная свадьба"),
+    (8, "🥫", "Жестяная свадьба"), (9, "🏺", "Фаянсовая свадьба"), (10, "🌹", "Розовая свадьба"), (15, "💎", "Хрустальная свадьба"),
+    (20, "🍽", "Фарфоровая свадьба"), (25, "🥈", "Серебряная свадьба"), (50, "🥇", "Золотая свадьба"),
+]
+
+
+def wedding_title(years: int) -> tuple[str, str]:
+    cur = WEDDINGS[0]
+    for w in WEDDINGS:
+        if years >= w[0]:
+            cur = w
+    return cur[1], cur[2]
+
+
+def duration(seconds: int) -> str:
+    """3 года 5 мес · 23 дня 1 ч · 2 часа 27 мин"""
+    y, rem = divmod(seconds, 365 * 86400)
+    mo, rem = divmod(rem, 30 * 86400)
+    d, rem = divmod(rem, 86400)
+    h, rem = divmod(rem, 3600)
+    mi = rem // 60
+    def pl(n, one, few, many):
+        return f"{n} " + (one if n % 10 == 1 and n % 100 != 11 else few if 2 <= n % 10 <= 4 and not 12 <= n % 100 <= 14 else many)
+    if y:
+        return pl(y, "год", "года", "лет") + (f" {mo} мес" if mo else "")
+    if mo:
+        return f"{mo} мес" + (f" {d} дн" if d else "")
+    if d:
+        return pl(d, "день", "дня", "дней") + (f" {h} ч" if h else "")
+    if h:
+        return pl(h, "час", "часа", "часов") + (f" {mi} мин" if mi else "")
+    return f"{mi} мин"
 
 
 @router.message(Command("браки", "marriages", "пары", prefix="+/!"))
 async def cmd_marriages(msg: Message):
     chat_id = msg.chat.id
-    rows = await db.marriages(chat_id)
+    rows = sorted(await db.marriages(chat_id), key=lambda r: r["since"])
     if not rows:
         return await reply(msg, "marriages_empty")
-    lines = []
-    for r in rows:
-        days = (int(time.time()) - r["since"]) // 86400
-        lines.append(f"💍 {await m(chat_id, r['a'])} + {await m(chat_id, r['b'])} — {days} дн.")
-    await reply(msg, "marriages_list", list="\n".join(lines))
+    now = int(time.time())
+    groups: dict[str, list[str]] = {}
+    order: list[str] = []
+    for i, r in enumerate(rows, 1):
+        age = now - r["since"]
+        emoji, title = wedding_title(age // (365 * 86400))
+        head = f"{emoji} <b>{title}</b>"
+        if head not in groups:
+            groups[head] = []
+            order.append(head)
+        groups[head].append(f"{i}. {await m(chat_id, r['a'])} + {await m(chat_id, r['b'])} ({duration(age)})")
+    text = "💍 <b>Браки этого чата</b>\n\n" + "\n\n".join(h + "\n" + "\n".join(groups[h]) for h in order)
+    # длинные списки — кусками по 4000 символов
+    while text:
+        cut = text.rfind("\n", 0, 4000) if len(text) > 4000 else len(text)
+        sent = await msg.answer(text[:cut], disable_web_page_preview=True)
+        await db.remember_bot_message(chat_id, sent.message_id)
+        text = text[cut:].lstrip("\n")
 
 
 # ---------- +влюблен ----------
@@ -176,3 +225,27 @@ async def cmd_love(msg: Message):
     await reply(msg, "love_sarra", user=me, n=n)
     if await db.give_achievement(chat_id, msg.from_user.id, "lover"):
         await reply(msg, "achievement", user=me, ach=ACHIEVEMENTS["lover"])
+
+
+# ---------- +отношения: сводка ----------
+@router.message(Command("отношения", "статус", "relations", prefix="+/!"))
+async def cmd_relations(msg: Message):
+    chat_id = msg.chat.id
+    uid, name, _ = await resolve_target(msg)
+    if not uid:
+        uid, name = msg.from_user.id, msg.from_user.first_name
+    me = await m(chat_id, uid, name)
+    p = await db.crush(chat_id, uid)
+    partner = await db.partner(chat_id, uid)
+    lines = []
+    if partner:
+        row = await db.marriage(chat_id, uid)
+        lines.append(f"💍 в браке с {await m(chat_id, partner)} — {(int(time.time()) - row['since']) // 86400} дн.")
+    else:
+        lines.append("💍 не в браке. +брак (ответом) — если решишься.")
+    if p:
+        mutual = await db.crush(chat_id, p) == uid
+        lines.append(f"💘 влюблён(а) в {await m(chat_id, p)}" + (" — и это взаимно!" if mutual else ""))
+    else:
+        lines.append("💘 ни в кого не влюблён(а). +влюблен (ответом) — я никому не скажу. скажу.")
+    await msg.answer(f"{me}:\n" + "\n".join(lines))

@@ -23,6 +23,7 @@ class MassMiddleware(BaseMiddleware):
             row = await db.touch_user(event.chat.id, event.from_user)
             await db.add_mass(event.chat.id, event.from_user.id, MASS_PER_MESSAGE, daily_cap=MASS_DAILY_CAP)
             msgs = await db.inc_msgs(event.chat.id, event.from_user.id)
+            await db.bump_daily(event.chat.id, event.from_user.id)
             await check_achievements(event, row, msgs)
             if msgs % 500 == 0:
                 s = await db.settings(event.chat.id)
@@ -52,17 +53,12 @@ async def maybe_chatter(msg: Message):
 
 
 @router.message(Command("me", "я", "профиль", prefix="/!"))
-async def cmd_me(msg: Message):
+async def cmd_me(msg: Message, bot):
+    from handlers.whoami import send_card
     uid, name, _ = await resolve_target(msg)
     if not uid:
         uid, name = msg.from_user.id, msg.from_user.first_name
-    row = await db.user(msg.chat.id, uid)
-    if not row:
-        return await msg.answer("я его ещё не видела. или он молчит. как и я, иногда.")
-    ach = ", ".join(ACHIEVEMENTS.get(a, a) for a in await db.achievements(msg.chat.id, uid)) or "пока нет"
-    await reply(msg, "me", user=mention(uid, row["nick"] or name), mass=int(row["mass"]), level=level(row["mass"]),
-                rank=await db.rank(msg.chat.id, uid), msgs=row["msgs"],
-                warns=await db.active_warns(msg.chat.id, uid), ach=html.escape(ach))
+    await send_card(msg, bot, uid, name)
 
 
 @router.message(Command("top", "топ", prefix="/!"))

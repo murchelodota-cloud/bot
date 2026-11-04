@@ -4,6 +4,8 @@ import html
 import logging
 import os
 import re
+import json
+import subprocess
 from collections import defaultdict
 from aiogram import Router, Bot, F
 from aiogram.filters import Command
@@ -56,8 +58,25 @@ def _download(query: str) -> dict:
             return {"error": "toolong", "title": info.get("title"), "duration": duration}
         info = ydl.extract_info(info.get("webpage_url") or info["url"], download=True)
         path = os.path.join(MUSIC_DIR, f"{info['id']}.mp3")
-        if not os.path.exists(path):
+        if not os.path.exists(path) or os.path.getsize(path) < 10_000:
             return {"error": "notfound"}
+        # жёстко перекодируем в стандартный mp3 — так Telegram играет его на любом клиенте
+        fixed = os.path.join(MUSIC_DIR, f"{info['id']}.fixed.mp3")
+        subprocess.run(
+            ["ffmpeg", "-y", "-loglevel", "error", "-i", path, "-vn", "-map_metadata", "-1",
+             "-ar", "44100", "-ac", "2", "-c:a", "libmp3lame", "-b:a", "192k", "-id3v2_version", "3", fixed],
+            check=False, timeout=300,
+        )
+        if os.path.exists(fixed) and os.path.getsize(fixed) > 10_000:
+            os.remove(path)
+            path = fixed
+        try:
+            probe = subprocess.run(
+                ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "json", path],
+                capture_output=True, text=True, timeout=60)
+            duration = int(float(json.loads(probe.stdout)["format"]["duration"])) or duration
+        except Exception:
+            pass
         return {
             "path": path, "id": info["id"],
             "title": info.get("track") or info.get("title") or "трек",
@@ -109,6 +128,7 @@ async def play(msg: Message, query: str):
             return await reply(msg, key, limit=MUSIC_MAX_MINUTES, title=html.escape(res.get("title") or ""))
         try:
             caption = (await _caption(msg)).format(user=mention(msg.from_user.id, msg.from_user.first_name))
+            logging.info("play: sending %s (%d bytes, %ds)", res["path"], os.path.getsize(res["path"]), res["duration"])
             await msg.answer_audio(
                 FSInputFile(res["path"]), title=res["title"][:64], performer=res["artist"][:64] or None,
                 duration=res["duration"], caption=caption,
