@@ -20,6 +20,8 @@ DEFAULT_SETTINGS = {
     "raid_joins_per_min": 10,
     "newbie_hours": 12,       # новичкам без медиа при рейде
     "court_minutes": 10,
+    "max_spouses": 4,         # сколько браков может быть у одного человека
+    "report_chat": 0,         # id чата для жалоб /report (0 — брать REPORT_CHAT_ID из .env)
     "matfilter": 1,           # 1/0 — фильтр мата
     "mat_soft": 1,            # 1 — мягкий режим (предупреждает), 0 — удаляет
     "dupfilter": 1,           # 1/0 — резать одинаковые сообщения подряд
@@ -47,4 +49,5 @@ if not BOT_TOKEN:
 
 # Музыка
 MUSIC_MAX_MINUTES = 12            # треки длиннее не качаем
+MUSIC_TIMEOUT = 120               # секунд на поиск+скачивание, потом сдаёмся
 MUSIC_DIR = os.path.join(os.path.dirname(os.path.abspath(DB_PATH)) or ".", "music_tmp")

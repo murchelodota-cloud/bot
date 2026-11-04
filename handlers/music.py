@@ -13,9 +13,13 @@ from aiogram.types import Message, FSInputFile
 from aiogram.exceptions import TelegramBadRequest
 from db import db
 from utils import reply, mention, split_args
-from config import MUSIC_MAX_MINUTES, MUSIC_DIR
+from config import MUSIC_MAX_MINUTES, MUSIC_DIR, MUSIC_TIMEOUT
 
 router = Router()
+
+
+def qkey(q: str) -> str:
+    return " ".join(q.lower().split())[:120]
 _locks: dict[int, asyncio.Lock] = defaultdict(asyncio.Lock)
 URL_RE = re.compile(r"https?://\S+")
 # «включи …», «поставь …», «саррочка, включи …», «хочу послушать …», «найди песню …»
@@ -35,7 +39,10 @@ def _ydl_opts(outtmpl: str) -> dict:
         "outtmpl": outtmpl,
         "noplaylist": True,
         "quiet": True,
-        "no_warnings": True,
+        "no_warnings": False,
+        "socket_timeout": 20,
+        "retries": 2,
+        "extractor_retries": 1,
         "default_search": "ytsearch1",
         "postprocessors": [{"key": "FFmpegExtractAudio", "preferredcodec": "mp3", "preferredquality": "192"}],
     }
@@ -102,6 +109,14 @@ async def natural_play(msg: Message, m: re.Match):
 async def play(msg: Message, query: str):
     if not query:
         return await reply(msg, "play_usage")
+    cached = await db.music_get(qkey(query))
+    if cached:
+        try:
+            caption = (await _caption(msg)).format(user=mention(msg.from_user.id, msg.from_user.first_name))
+            await msg.answer_audio(cached["file_id"], caption=caption)
+            return
+        except TelegramBadRequest:
+            pass  # file_id протух — качаем заново
     lock = _locks[msg.chat.id]
     if lock.locked():
         return await reply(msg, "play_busy")
@@ -110,29 +125,38 @@ async def play(msg: Message, query: str):
         loop = asyncio.get_running_loop()
         res = {"error": "fail"}
         # сначала как есть (ссылка или YouTube), если YouTube отказал — SoundCloud
-        attempts = [query] if URL_RE.search(query) else [query, f"scsearch1:{query}"]
-        for q in attempts:
-            try:
-                res = await loop.run_in_executor(None, _download, q)
-            except Exception as e:
-                logging.warning("play %r: %s", q, str(e)[:300])
-                res = {"error": "fail"}
-            if "error" not in res or res["error"] == "toolong":
-                break
+        attempts = [query] if URL_RE.search(query) else [f"scsearch1:{query}", f"ytsearch1:{query}"]
         try:
-            await status.delete()
-        except TelegramBadRequest:
-            pass
+            for q in attempts:
+                try:
+                    res = await asyncio.wait_for(loop.run_in_executor(None, _download, q), timeout=MUSIC_TIMEOUT)
+                except asyncio.TimeoutError:
+                    logging.warning("play %r: timeout after %ss", q, MUSIC_TIMEOUT)
+                    res = {"error": "fail"}
+                    break
+                except Exception as e:
+                    logging.warning("play %r: %s", q, str(e)[:300])
+                    res = {"error": "fail"}
+                if "error" not in res or res["error"] == "toolong":
+                    break
+        finally:
+            try:
+                await status.delete()
+            except TelegramBadRequest:
+                pass
         if "error" in res:
             key = {"notfound": "play_notfound", "toolong": "play_toolong"}.get(res["error"], "play_fail")
             return await reply(msg, key, limit=MUSIC_MAX_MINUTES, title=html.escape(res.get("title") or ""))
         try:
             caption = (await _caption(msg)).format(user=mention(msg.from_user.id, msg.from_user.first_name))
             logging.info("play: sending %s (%d bytes, %ds)", res["path"], os.path.getsize(res["path"]), res["duration"])
-            await msg.answer_audio(
+            sent = await msg.answer_audio(
                 FSInputFile(res["path"]), title=res["title"][:64], performer=res["artist"][:64] or None,
                 duration=res["duration"], caption=caption,
             )
+            if sent.audio:
+                await db.music_put(qkey(query), sent.audio.file_id, res["title"], res["artist"], res["duration"])
+                await db.music_put("id:" + res["id"], sent.audio.file_id, res["title"], res["artist"], res["duration"])
         finally:
             try:
                 os.remove(res["path"])

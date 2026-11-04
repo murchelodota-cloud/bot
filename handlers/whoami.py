@@ -106,13 +106,24 @@ async def build_card(bot: Bot, chat_id: int, uid: int, fallback_name: str | None
     act = await db.activity(chat_id, uid)
     warns = await db.active_warns(chat_id, uid)
     coins = await db.coins_total(chat_id, uid)
-    partner = await db.partner(chat_id, uid)
+    partners = await db.partners(chat_id, uid)
     crush = await db.crush(chat_id, uid)
     ach = await db.achievements(chat_id, uid)
 
     lines = [f"👤 Это пользователь {mention(uid, name)}" + (f" (@{username})" if username else "")]
     if tg_admin:
         lines.append("👨‍🔧 Телеграм-админ этого чата")
+    if row and row["title"]:
+        lines.append(f"🎖 Звание: {html.escape(row['title'])}")
+    extra = []
+    if row and row["gender"]:
+        extra.append("♂ муж." if row["gender"] == "м" else "♀ жен.")
+    if row and row["city"]:
+        extra.append(f"📍 {html.escape(row['city'])}")
+    if row and row["birthday"]:
+        extra.append(f"🎂 {row['birthday']}")
+    if extra:
+        lines.append(" · ".join(extra))
     lines += [
         "",
         f"⭐ [{rank}] Ранг: {rank_name(rank).capitalize()}",
@@ -124,7 +135,7 @@ async def build_card(bot: Bot, chat_id: int, uid: int, fallback_name: str | None
     if warns:
         lines.append(f"⚠️ Активных предов: {warns}")
     rel = []
-    if partner:
+    for partner in partners:
         p = await db.user(chat_id, partner)
         rel.append(f"💍 в браке с {mention(partner, (p['nick'] or p['first_name']) if p else None)}")
     if crush:
@@ -199,9 +210,9 @@ async def on_who_button(cb: CallbackQuery, bot: Bot):
         ach = await db.achievements(chat_id, uid)
         text = f"🏆 награды {name}:\n" + ("\n".join(f"🎗 {ACHIEVEMENTS.get(a, a)}" for a in ach) or "пока нет. но я верю.")
     elif what == "rel":
-        partner, crush = await db.partner(chat_id, uid), await db.crush(chat_id, uid)
+        partners, crush = await db.partners(chat_id, uid), await db.crush(chat_id, uid)
         parts = []
-        if partner:
+        for partner in partners:
             p = await db.user(chat_id, partner); parts.append(f"💍 в браке с {mention(partner, (p['nick'] or p['first_name']) if p else None)}")
         if crush:
             c = await db.user(chat_id, crush); parts.append(f"💘 влюблён(а) в {mention(crush, (c['nick'] or c['first_name']) if c else None)}")

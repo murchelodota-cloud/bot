@@ -99,3 +99,47 @@ async def on_new_members(msg: Message, bot: Bot):
     for u in msg.new_chat_members:
         if u.is_bot and u.id != me.id:
             await reply(msg, "jealous", user=html.escape(u.first_name))
+
+
+@router.message(Command("болтай", "скажи", "chatter", prefix="!+/"))
+async def cmd_chatter(msg: Message):
+    """!болтай — реплика из болтовни прямо сейчас."""
+    await reply(msg, "chatter")
+
+
+USER_COMMANDS = (
+    "📋 <b>что можно всем</b> (пишется без слэша, как есть):\n\n"
+    "👤 <b>обо мне</b>\n"
+    "• <code>!кто я</code> — моя карточка с графиком активности\n"
+    "• <code>!кто ты</code> (ответом) — карточка другого\n"
+    "• <code>+ник Имя</code> — мой ник · <code>+ник снять</code>\n"
+    "• <code>+описание текст</code> — описание в карточке\n"
+    "• <code>+звание текст</code> · <code>+пол м|ж</code> · <code>+город Москва</code> · <code>+др 24.03</code> — поздравлю!\n"
+    "• <code>!топ</code> — топ по массе · <code>!стата неделя</code> — топ по сообщениям · <code>!олды</code> · <code>!новички</code>\n"
+    "• <code>!правила</code> — правила чата · <code>!гб</code> (ответом) — голосование за бан\n\n"
+    "💍 <b>отношения</b>\n"
+    "• <code>+брак</code> (ответом) — предложение: 🕌 никях или ⛪ венчание (или сразу <code>+никях</code> / <code>+венчание</code>); до 4 браков\n"
+    "• <code>+развод</code> · <code>+пара</code> · <code>+браки</code>\n"
+    "• <code>+влюблен</code> (ответом) — влюбиться · <code>+разлюбил</code>\n"
+    "• <code>+отношения</code> — кто у меня кто\n"
+    "• <code>+люблю сарру</code> — признаться мне 🥺\n"
+    "• <code>+поцеловать</code> · <code>+обнять</code> · <code>+погладить</code> · <code>+кусь</code> · <code>+шлёпнуть</code> (ответом; без ответа — мне 🙈)\n\n"
+    "🪙 <b>сарра-коины</b>\n"
+    "• <code>+коины</code> — мой баланс · <code>+лидеры</code> — топ месяца\n"
+    "• +100 коинов за каждые 500 сообщений, 1-го числа — итоги и приз\n\n"
+    "🎵 <b>музыка</b>\n"
+    "• <code>трек название</code> / <code>включи название</code> / <code>найди название</code> — пришлю mp3\n"
+    "• <code>!видео ссылка</code> — скачаю видео (инста, тикток, ютуб, вк); рилсы и тиктоки качаю сама\n\n"
+    "🛠 <b>полезное</b>\n"
+    "• <code>/remind 2h текст</code> — напомню\n"
+    "• <code>/tag имя</code> — стикер по тегу · <code>/tags</code> — список\n"
+    "• <code>!репорт</code> (ответом) — пожаловаться админам\n"
+    "• <code>!спасибо</code> · <code>!настроение</code> · <code>!болтай</code>\n\n"
+    "админские команды — в <code>/help</code>."
+)
+
+
+@router.message(Command("команды", "commands", "кмд", prefix="!+/"))
+async def cmd_commands(msg: Message):
+    sent = await msg.answer(USER_COMMANDS, disable_web_page_preview=True)
+    await db.remember_bot_message(msg.chat.id, sent.message_id)

@@ -77,6 +77,14 @@ CREATE TABLE IF NOT EXISTS daily_activity (
 CREATE TABLE IF NOT EXISTS music_cache (
     key TEXT PRIMARY KEY, file_id TEXT, title TEXT, artist TEXT, duration INTEGER, hits INTEGER DEFAULT 0
 );
+CREATE TABLE IF NOT EXISTS mutes (
+    chat_id INTEGER, user_id INTEGER, until INTEGER, by_user INTEGER, reason TEXT,
+    PRIMARY KEY (chat_id, user_id)
+);
+CREATE TABLE IF NOT EXISTS bans (
+    chat_id INTEGER, user_id INTEGER, by_user INTEGER, reason TEXT, ts INTEGER,
+    PRIMARY KEY (chat_id, user_id)
+);
 CREATE TABLE IF NOT EXISTS ranks (
     chat_id INTEGER, user_id INTEGER, rank INTEGER, by_user INTEGER, set_at INTEGER,
     PRIMARY KEY (chat_id, user_id)
@@ -106,6 +114,12 @@ class DB:
             await self.conn.execute("ALTER TABLE users ADD COLUMN nick TEXT")
         if "bio" not in cols:
             await self.conn.execute("ALTER TABLE users ADD COLUMN bio TEXT")
+        for col in ("title", "gender", "city", "birthday"):
+            if col not in cols:
+                await self.conn.execute(f"ALTER TABLE users ADD COLUMN {col} TEXT")
+        cur = await self.conn.execute("PRAGMA table_info(marriages)")
+        if "kind" not in [r["name"] for r in await cur.fetchall()]:
+            await self.conn.execute("ALTER TABLE marriages ADD COLUMN kind TEXT")
         await self.conn.commit()
 
     # ---------- settings ----------
@@ -483,13 +497,27 @@ class DB:
             "SELECT * FROM marriages WHERE chat_id=? AND (a=? OR b=?)", (chat_id, user_id, user_id))
         return await cur.fetchone()
 
-    async def marry(self, chat_id, a, b):
-        await self.conn.execute("INSERT INTO marriages VALUES(?,?,?,?)", (chat_id, a, b, int(time.time())))
+    async def marry(self, chat_id, a, b, kind="никях"):
+        await self.conn.execute("INSERT INTO marriages(chat_id,a,b,since,kind) VALUES(?,?,?,?,?)", (chat_id, a, b, int(time.time()), kind))
         await self.conn.commit()
 
-    async def divorce(self, chat_id, user_id):
-        await self.conn.execute("DELETE FROM marriages WHERE chat_id=? AND (a=? OR b=?)", (chat_id, user_id, user_id))
+    async def divorce(self, chat_id, user_id, other=None):
+        if other is None:
+            await self.conn.execute("DELETE FROM marriages WHERE chat_id=? AND (a=? OR b=?)", (chat_id, user_id, user_id))
+        else:
+            await self.conn.execute(
+                "DELETE FROM marriages WHERE chat_id=? AND ((a=? AND b=?) OR (a=? AND b=?))", (chat_id, user_id, other, other, user_id))
         await self.conn.commit()
+
+    async def partners(self, chat_id, user_id) -> list[int]:
+        cur = await self.conn.execute(
+            "SELECT a, b FROM marriages WHERE chat_id=? AND (a=? OR b=?) ORDER BY since", (chat_id, user_id, user_id))
+        return [r["b"] if r["a"] == user_id else r["a"] for r in await cur.fetchall()]
+
+    async def marriage_with(self, chat_id, a, b):
+        cur = await self.conn.execute(
+            "SELECT * FROM marriages WHERE chat_id=? AND ((a=? AND b=?) OR (a=? AND b=?))", (chat_id, a, b, b, a))
+        return await cur.fetchone()
 
     async def marriages(self, chat_id):
         cur = await self.conn.execute("SELECT * FROM marriages WHERE chat_id=? ORDER BY since", (chat_id,))
@@ -621,6 +649,115 @@ class DB:
             "ON CONFLICT(key) DO UPDATE SET file_id=excluded.file_id",
             (key, file_id, title, artist, duration))
         await self.conn.commit()
+
+
+    # ---------- ирис-пак ----------
+    async def set_user_field(self, chat_id, user_id, field, value):
+        assert field in ("title", "gender", "city", "birthday", "nick", "bio")
+        await self.conn.execute(f"UPDATE users SET {field}=? WHERE chat_id=? AND user_id=?", (value, chat_id, user_id))
+        await self.conn.commit()
+
+    async def recent_warns(self, chat_id, limit=20):
+        cur = await self.conn.execute(
+            "SELECT * FROM warns WHERE chat_id=? ORDER BY created_at DESC LIMIT ?", (chat_id, limit))
+        return await cur.fetchall()
+
+    async def remove_last_warn(self, chat_id, user_id) -> bool:
+        cur = await self.conn.execute(
+            "SELECT id FROM warns WHERE chat_id=? AND user_id=? ORDER BY created_at DESC LIMIT 1", (chat_id, user_id))
+        row = await cur.fetchone()
+        if not row:
+            return False
+        await self.conn.execute("DELETE FROM warns WHERE id=?", (row["id"],))
+        await self.conn.commit()
+        return True
+
+    async def record_mute(self, chat_id, user_id, until, by_user, reason=""):
+        await self.conn.execute(
+            "INSERT INTO mutes VALUES(?,?,?,?,?) ON CONFLICT(chat_id,user_id) DO UPDATE SET until=excluded.until, by_user=excluded.by_user, reason=excluded.reason",
+            (chat_id, user_id, until, by_user, reason))
+        await self.conn.commit()
+
+    async def remove_mute(self, chat_id, user_id):
+        await self.conn.execute("DELETE FROM mutes WHERE chat_id=? AND user_id=?", (chat_id, user_id))
+        await self.conn.commit()
+
+    async def active_mutes(self, chat_id):
+        now = int(time.time())
+        await self.conn.execute("DELETE FROM mutes WHERE chat_id=? AND until<=?", (chat_id, now))
+        await self.conn.commit()
+        cur = await self.conn.execute("SELECT * FROM mutes WHERE chat_id=? ORDER BY until", (chat_id,))
+        return await cur.fetchall()
+
+    async def record_ban(self, chat_id, user_id, by_user, reason=""):
+        await self.conn.execute(
+            "INSERT INTO bans VALUES(?,?,?,?,?) ON CONFLICT(chat_id,user_id) DO UPDATE SET by_user=excluded.by_user, reason=excluded.reason, ts=excluded.ts",
+            (chat_id, user_id, by_user, reason, int(time.time())))
+        await self.conn.commit()
+
+    async def remove_ban(self, chat_id, user_id):
+        await self.conn.execute("DELETE FROM bans WHERE chat_id=? AND user_id=?", (chat_id, user_id))
+        await self.conn.commit()
+
+    async def bans(self, chat_id, limit=30):
+        cur = await self.conn.execute("SELECT * FROM bans WHERE chat_id=? ORDER BY ts DESC LIMIT ?", (chat_id, limit))
+        return await cur.fetchall()
+
+    async def ban_info(self, chat_id, user_id):
+        cur = await self.conn.execute("SELECT * FROM bans WHERE chat_id=? AND user_id=?", (chat_id, user_id))
+        return await cur.fetchone()
+
+    async def clear_bans(self, chat_id):
+        await self.conn.execute("DELETE FROM bans WHERE chat_id=?", (chat_id,))
+        await self.conn.commit()
+
+    async def silent_users(self, chat_id, days) -> list[int]:
+        since = int(time.time()) - days * 86400
+        cur = await self.conn.execute(
+            "SELECT user_id FROM users WHERE chat_id=? AND msgs=0 AND joined_at<?", (chat_id, since))
+        return [r["user_id"] for r in await cur.fetchall()]
+
+    async def inactive_users(self, chat_id, days) -> list[int]:
+        since = int(time.time()) - days * 86400
+        cur = await self.conn.execute(
+            "SELECT user_id FROM users WHERE chat_id=? AND last_seen<?", (chat_id, since))
+        return [r["user_id"] for r in await cur.fetchall()]
+
+    async def top_period(self, chat_id, days, limit=10):
+        if days == 0:
+            cur = await self.conn.execute(
+                "SELECT user_id, msgs AS n FROM users WHERE chat_id=? AND msgs>0 ORDER BY msgs DESC LIMIT ?", (chat_id, limit))
+        else:
+            since = time.strftime("%Y-%m-%d", time.localtime(time.time() - (days - 1) * 86400))
+            cur = await self.conn.execute(
+                "SELECT user_id, SUM(n) AS n FROM daily_activity WHERE chat_id=? AND day>=? GROUP BY user_id ORDER BY n DESC LIMIT ?",
+                (chat_id, since, limit))
+        return await cur.fetchall()
+
+    async def oldest(self, chat_id, limit=15):
+        cur = await self.conn.execute(
+            "SELECT * FROM users WHERE chat_id=? AND joined_at IS NOT NULL ORDER BY joined_at ASC LIMIT ?", (chat_id, limit))
+        return await cur.fetchall()
+
+    async def newest(self, chat_id, limit=15):
+        cur = await self.conn.execute(
+            "SELECT * FROM users WHERE chat_id=? AND joined_at IS NOT NULL ORDER BY joined_at DESC LIMIT ?", (chat_id, limit))
+        return await cur.fetchall()
+
+    async def all_nicks(self, chat_id):
+        cur = await self.conn.execute(
+            "SELECT user_id, first_name, nick FROM users WHERE chat_id=? AND nick IS NOT NULL AND nick!='' ORDER BY nick", (chat_id,))
+        return await cur.fetchall()
+
+    async def all_users(self, chat_id, limit=200):
+        cur = await self.conn.execute(
+            "SELECT user_id, first_name, nick FROM users WHERE chat_id=? ORDER BY last_seen DESC LIMIT ?", (chat_id, limit))
+        return await cur.fetchall()
+
+    async def birthdays_today(self, chat_id, ddmm: str):
+        cur = await self.conn.execute(
+            "SELECT * FROM users WHERE chat_id=? AND birthday LIKE ?", (chat_id, ddmm + "%"))
+        return await cur.fetchall()
 
 
 db = DB()

@@ -9,6 +9,8 @@ from .phrases_cmd import router as phrases_router
 from .social import router as social_router
 from .coins import router as coins_router
 from .whoami import router as whoami_router
+from .iris import router as iris_router
+from .video import router as video_router
 
 # antispam последним: он перехватывает все текстовые сообщения
-routers = [common_router, moderation_router, court_router, profile_router, extras_router, music_router, phrases_router, social_router, coins_router, whoami_router, badwords_router, antispam_router]
+routers = [iris_router, common_router, moderation_router, court_router, profile_router, extras_router, music_router, phrases_router, social_router, coins_router, whoami_router, video_router, badwords_router, antispam_router]

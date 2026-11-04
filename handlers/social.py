@@ -7,7 +7,7 @@ from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKe
 from aiogram.exceptions import TelegramBadRequest
 from db import db
 from phrases import say, ACHIEVEMENTS
-from utils import reply, mention, split_args, resolve_target, style
+from utils import reply, mention, split_args, resolve_target, style, deny
 
 router = Router()
 NICK_MAX = 24
@@ -44,34 +44,81 @@ async def cmd_nick(msg: Message):
     await reply(msg, "nick_set", user=mention(msg.from_user.id, msg.from_user.first_name), nick=html.escape(nick))
 
 
+async def can_marry(chat_id: int, uid: int) -> bool:
+    s = await db.settings(chat_id)
+    return len(await db.partners(chat_id, uid)) < max(1, int(s.get("max_spouses", 1)))
+
+
+KINDS = {"никях": "🕌 никях", "венчание": "⛪ венчание"}
+KIND_ALIASES = {"никях": "никях", "никах": "никях", "nikah": "никях", "венчание": "венчание", "венчать": "венчание", "церковь": "венчание"}
+
+
+def kind_label(kind: str | None) -> str:
+    return KINDS.get(kind or "", "💍 брак")
+
+
 # ---------- +брак ----------
-@router.message(Command("брак", "marry", "женись", "выходи", prefix="+/!"))
+@router.message(Command("брак", "marry", "женись", "выходи", "никях", "венчание", prefix="+/!"))
 async def cmd_marry(msg: Message):
+    """+брак (ответом) — предложение; +брак никях / +брак венчание — сразу с типом."""
     chat_id = msg.chat.id
     await db.touch_user(chat_id, msg.from_user)
-    uid, name, _ = await resolve_target(msg)
+    uid, name, args = await resolve_target(msg)
     if not uid:
         return await reply(msg, "marry_usage")
     if uid == msg.from_user.id:
         return await reply(msg, "marry_self")
-    if await db.partner(chat_id, msg.from_user.id):
+    if await db.marriage_with(chat_id, msg.from_user.id, uid):
+        return await reply(msg, "marry_same", user=await m(chat_id, uid, name))
+    if not await can_marry(chat_id, msg.from_user.id):
         return await reply(msg, "marry_already_me")
-    if await db.partner(chat_id, uid):
+    if not await can_marry(chat_id, uid):
         return await reply(msg, "marry_taken", user=await m(chat_id, uid, name))
+    cmd = (msg.text or "").split()[0][1:].lower()
+    kind = KIND_ALIASES.get(cmd) or next((KIND_ALIASES[a.lower()] for a in args if a.lower() in KIND_ALIASES), None)
+    if not kind:
+        kb = InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text="🕌 никях", callback_data=f"mkind:{msg.from_user.id}:{uid}:никях"),
+            InlineKeyboardButton(text="⛪ венчание", callback_data=f"mkind:{msg.from_user.id}:{uid}:венчание"),
+        ]])
+        sent = await msg.answer(say(await style(chat_id), "marry_kind", chat_id=chat_id,
+                                    user=await m(chat_id, msg.from_user.id, msg.from_user.first_name)), reply_markup=kb)
+        await db.remember_bot_message(chat_id, sent.message_id)
+        return
+    await send_proposal(msg, msg.from_user.id, msg.from_user.first_name, uid, name, kind)
+
+
+async def send_proposal(msg: Message, a: int, an: str | None, b: int, bn: str | None, kind: str):
+    chat_id = msg.chat.id
     kb = InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(text="да 💍", callback_data=f"marry:{msg.from_user.id}:{uid}:yes"),
-        InlineKeyboardButton(text="нет 💔", callback_data=f"marry:{msg.from_user.id}:{uid}:no"),
+        InlineKeyboardButton(text="да 💍", callback_data=f"marry:{a}:{b}:yes:{kind}"),
+        InlineKeyboardButton(text="нет 💔", callback_data=f"marry:{a}:{b}:no:{kind}"),
     ]])
     st = await style(chat_id)
-    text = say(st, "marry_proposal", chat_id=chat_id, user=await m(chat_id, msg.from_user.id, msg.from_user.first_name),
-               target=await m(chat_id, uid, name))
+    text = say(st, "marry_proposal", chat_id=chat_id, user=await m(chat_id, a, an), target=await m(chat_id, b, bn), kind=kind_label(kind))
     sent = await msg.answer(text, reply_markup=kb)
     await db.remember_bot_message(chat_id, sent.message_id)
 
 
+@router.callback_query(F.data.startswith("mkind:"))
+async def on_marry_kind(cb: CallbackQuery):
+    _, a, b, kind = cb.data.split(":")
+    a, b = int(a), int(b)
+    if cb.from_user.id != a:
+        return await cb.answer("выбирает тот, кто делает предложение.", show_alert=True)
+    try:
+        await cb.message.delete()
+    except TelegramBadRequest:
+        pass
+    await send_proposal(cb.message, a, cb.from_user.first_name, b, None, kind)
+    await cb.answer()
+
+
 @router.callback_query(F.data.startswith("marry:"))
 async def on_marry(cb: CallbackQuery):
-    _, a, b, ans = cb.data.split(":")
+    parts = cb.data.split(":")
+    _, a, b, ans = parts[:4]
+    kind = parts[4] if len(parts) > 4 else "никях"
     a, b = int(a), int(b)
     chat_id = cb.message.chat.id
     if cb.from_user.id != b:
@@ -80,11 +127,11 @@ async def on_marry(cb: CallbackQuery):
     ma, mb = await m(chat_id, a), await m(chat_id, b, cb.from_user.first_name)
     if ans == "no":
         text = say(st, "marry_no", chat_id=chat_id, user=ma, target=mb)
-    elif await db.partner(chat_id, a) or await db.partner(chat_id, b):
+    elif not await can_marry(chat_id, a) or not await can_marry(chat_id, b) or await db.marriage_with(chat_id, a, b):
         text = say(st, "marry_taken", chat_id=chat_id, user=ma)
     else:
-        await db.marry(chat_id, a, b)
-        text = say(st, "marry_yes", chat_id=chat_id, user=ma, target=mb)
+        await db.marry(chat_id, a, b, kind)
+        text = say(st, "marry_yes", chat_id=chat_id, user=ma, target=mb, kind=kind_label(kind))
     try:
         await cb.message.edit_text(text)
     except TelegramBadRequest:
@@ -92,14 +139,67 @@ async def on_marry(cb: CallbackQuery):
     await cb.answer()
 
 
+@router.message(Command("поженить", "женить", "marryall", prefix="+/!"))
+async def cmd_marry_force(msg: Message, bot: Bot):
+    """!поженить @юзер @юзер — админ женит без согласия (младший админ+). Или ответом + один @юзер."""
+    if await deny(msg, bot, "court"):   # court == ранг «младший админ»
+        return
+    chat_id = msg.chat.id
+    args = split_args(msg)
+    ids: list[tuple[int, str | None]] = []
+    if msg.reply_to_message and msg.reply_to_message.from_user:
+        u = msg.reply_to_message.from_user
+        ids.append((u.id, u.first_name))
+    for a in args:
+        row = await db.find_user_by_username(chat_id, a) if a.startswith("@") else (await db.user(chat_id, int(a)) if a.isdigit() else None)
+        if row:
+            ids.append((row["user_id"], row["first_name"]))
+    ids = list(dict.fromkeys(ids))[:2]
+    if len(ids) < 2:
+        return await reply(msg, "marry_force_usage")
+    (a, an), (b, bn) = ids
+    if a == b:
+        return await reply(msg, "marry_self")
+    if await db.marriage_with(chat_id, a, b):
+        return await reply(msg, "marry_same", user=await m(chat_id, b, bn))
+    if not await can_marry(chat_id, a):
+        return await reply(msg, "marry_taken", user=await m(chat_id, a, an))
+    if not await can_marry(chat_id, b):
+        return await reply(msg, "marry_taken", user=await m(chat_id, b, bn))
+    kind = next((KIND_ALIASES[x.lower()] for x in args if x.lower() in KIND_ALIASES), "никях")
+    await db.marry(chat_id, a, b, kind)
+    await reply(msg, "marry_forced", kind=kind_label(kind), by=await m(chat_id, msg.from_user.id, msg.from_user.first_name),
+                user=await m(chat_id, a, an), target=await m(chat_id, b, bn))
+
+
+@router.message(Command("развести", "divorceall", prefix="+/!"))
+async def cmd_divorce_force(msg: Message, bot: Bot):
+    """!развести @юзер — админ расторгает чужой брак."""
+    if await deny(msg, bot, "court"):
+        return
+    uid, name, _ = await resolve_target(msg)
+    if not uid:
+        return await reply(msg, "marry_force_usage")
+    ps = await db.partners(msg.chat.id, uid)
+    if not ps:
+        return await reply(msg, "partner_none", user=await m(msg.chat.id, uid, name))
+    await db.divorce(msg.chat.id, uid)
+    await reply(msg, "divorce", user=await m(msg.chat.id, uid, name), target=", ".join([await m(msg.chat.id, p) for p in ps]))
+
+
 @router.message(Command("развод", "divorce", prefix="+/!"))
 async def cmd_divorce(msg: Message):
+    """+развод — расторгнуть брак; при многожёнстве: +развод @юзер (или ответом) — с кем именно."""
     chat_id = msg.chat.id
-    p = await db.partner(chat_id, msg.from_user.id)
-    if not p:
+    ps = await db.partners(chat_id, msg.from_user.id)
+    if not ps:
         return await reply(msg, "no_partner")
-    await db.divorce(chat_id, msg.from_user.id)
-    await reply(msg, "divorce", user=await m(chat_id, msg.from_user.id, msg.from_user.first_name), target=await m(chat_id, p))
+    uid, name, _ = await resolve_target(msg)
+    if len(ps) > 1 and (not uid or uid not in ps):
+        return await reply(msg, "divorce_which", list=", ".join([await m(chat_id, p) for p in ps]))
+    other = uid if uid in ps else ps[0]
+    await db.divorce(chat_id, msg.from_user.id, other)
+    await reply(msg, "divorce", user=await m(chat_id, msg.from_user.id, msg.from_user.first_name), target=await m(chat_id, other))
 
 
 @router.message(Command("пара", "partner", prefix="+/!"))
@@ -108,12 +208,18 @@ async def cmd_partner(msg: Message):
     uid, name, _ = await resolve_target(msg)
     if not uid:
         uid, name = msg.from_user.id, msg.from_user.first_name
-    p = await db.partner(chat_id, uid)
-    if not p:
+    ps = await db.partners(chat_id, uid)
+    if not ps:
         return await reply(msg, "partner_none", user=await m(chat_id, uid, name))
-    row = await db.marriage(chat_id, uid)
-    await reply(msg, "partner_show", user=await m(chat_id, uid, name), target=await m(chat_id, p),
-                days=duration(int(time.time()) - row["since"]))
+    if len(ps) == 1:
+        row = await db.marriage_with(chat_id, uid, ps[0])
+        return await reply(msg, "partner_show", user=await m(chat_id, uid, name), target=await m(chat_id, ps[0]),
+                           days=duration(int(time.time()) - row["since"]))
+    lines = []
+    for p in ps:
+        row = await db.marriage_with(chat_id, uid, p)
+        lines.append(f"{kind_label(row['kind'])}: {await m(chat_id, p)} — {duration(int(time.time()) - row['since'])}")
+    await reply(msg, "partners_show", user=await m(chat_id, uid, name), n=len(ps), list="\n".join(lines))
 
 
 WEDDINGS = [  # (минимум лет, эмодзи, название)
@@ -168,7 +274,8 @@ async def cmd_marriages(msg: Message):
         if head not in groups:
             groups[head] = []
             order.append(head)
-        groups[head].append(f"{i}. {await m(chat_id, r['a'])} + {await m(chat_id, r['b'])} ({duration(age)})")
+        k = KINDS.get(r["kind"] or "", "").split(" ")[0]
+        groups[head].append(f"{i}. {await m(chat_id, r['a'])} + {await m(chat_id, r['b'])} ({duration(age)}) {k}".rstrip())
     text = "💍 <b>Браки этого чата</b>\n\n" + "\n\n".join(h + "\n" + "\n".join(groups[h]) for h in order)
     # длинные списки — кусками по 4000 символов
     while text:
@@ -236,12 +343,12 @@ async def cmd_relations(msg: Message):
         uid, name = msg.from_user.id, msg.from_user.first_name
     me = await m(chat_id, uid, name)
     p = await db.crush(chat_id, uid)
-    partner = await db.partner(chat_id, uid)
+    ps = await db.partners(chat_id, uid)
     lines = []
-    if partner:
-        row = await db.marriage(chat_id, uid)
-        lines.append(f"💍 в браке с {await m(chat_id, partner)} — {(int(time.time()) - row['since']) // 86400} дн.")
-    else:
+    for partner in ps:
+        row = await db.marriage_with(chat_id, uid, partner)
+        lines.append(f"{kind_label(row['kind'])} с {await m(chat_id, partner)} — {duration(int(time.time()) - row['since'])}")
+    if not ps:
         lines.append("💍 не в браке. +брак (ответом) — если решишься.")
     if p:
         mutual = await db.crush(chat_id, p) == uid
@@ -249,3 +356,33 @@ async def cmd_relations(msg: Message):
     else:
         lines.append("💘 ни в кого не влюблён(а). +влюблен (ответом) — я никому не скажу. скажу.")
     await msg.answer(f"{me}:\n" + "\n".join(lines))
+
+
+# ---------- действия: +поцеловать, +обнять, +погладить, +кусь, +шлёпнуть, +вирт ----------
+ACTIONS = {
+    "поцеловать": "act_kiss", "поцелуй": "act_kiss", "чмок": "act_kiss", "kiss": "act_kiss",
+    "обнять": "act_hug", "обнимашки": "act_hug", "hug": "act_hug",
+    "погладить": "act_pat", "pat": "act_pat",
+    "кусь": "act_bite", "укусить": "act_bite",
+    "шлепнуть": "act_slap", "шлёпнуть": "act_slap", "шлепок": "act_slap", "slap": "act_slap",
+    "вирт": "act_virt",
+}
+
+
+@router.message(Command(*ACTIONS.keys(), prefix="+!/"))
+async def cmd_action(msg: Message):
+    chat_id = msg.chat.id
+    cmd = (msg.text or "").split()[0][1:].lower()
+    key = ACTIONS.get(cmd)
+    if not key:
+        return
+    await db.touch_user(chat_id, msg.from_user)
+    me = await m(chat_id, msg.from_user.id, msg.from_user.first_name)
+    if key == "act_virt":
+        await db.bump_mood(chat_id, -5)
+        return await reply(msg, key, user=me)
+    uid, name, _ = await resolve_target(msg)
+    if not uid or uid == msg.from_user.id:
+        await db.bump_mood(chat_id, 5)
+        return await reply(msg, key + "_me", user=me)
+    await reply(msg, key, user=me, target=await m(chat_id, uid, name))

@@ -44,11 +44,13 @@ async def cmd_warn(msg: Message, bot: Bot):
     try:
         if total >= s["warn_ban"]:
             await bot.ban_chat_member(msg.chat.id, uid)
+            await db.record_ban(msg.chat.id, uid, 0, "лимит предов")
             await db.clear_warns(msg.chat.id, uid)
             await reply(msg, "warn_autoban", user=user)
         elif total >= s["warn_mute"]:
             secs = int(s["automute_hours"] * 3600)
             await bot.restrict_chat_member(msg.chat.id, uid, MUTE_PERMS, until_date=int(time.time()) + secs)
+            await db.record_mute(msg.chat.id, uid, int(time.time()) + secs, 0, "лимит предов")
             await reply(msg, "warn_automute", user=user, time=human_duration(secs))
     except TelegramBadRequest as e:
         await reply(msg, "cant", reason=html.escape(str(e)))
@@ -87,6 +89,7 @@ async def cmd_mute(msg: Message, bot: Bot):
         return await reply(msg, "mute_too_long", max=human_duration(MOD_MUTE_MAX))
     try:
         await bot.restrict_chat_member(msg.chat.id, uid, MUTE_PERMS, until_date=int(time.time()) + secs)
+        await db.record_mute(msg.chat.id, uid, int(time.time()) + secs, msg.from_user.id, " ".join(args[1:])[:100])
         await reply(msg, "mute", user=mention(uid, name), time=human_duration(secs))
     except TelegramBadRequest as e:
         await reply(msg, "cant", reason=html.escape(str(e)))
@@ -99,6 +102,7 @@ async def cmd_unmute(msg: Message, bot: Bot):
     uid, name, _ = t
     try:
         await bot.restrict_chat_member(msg.chat.id, uid, FULL_PERMS)
+        await db.remove_mute(msg.chat.id, uid)
         await reply(msg, "unmute", user=mention(uid, name))
     except TelegramBadRequest as e:
         await reply(msg, "cant", reason=html.escape(str(e)))
@@ -112,6 +116,7 @@ async def cmd_ban(msg: Message, bot: Bot):
     reason = " ".join(args) or "без причины"
     try:
         await bot.ban_chat_member(msg.chat.id, uid)
+        await db.record_ban(msg.chat.id, uid, msg.from_user.id, reason)
         await reply(msg, "ban", user=mention(uid, name), reason=html.escape(reason))
     except TelegramBadRequest as e:
         await reply(msg, "cant", reason=html.escape(str(e)))
@@ -126,6 +131,7 @@ async def cmd_unban(msg: Message, bot: Bot):
         return await reply(msg, "no_target")
     try:
         await bot.unban_chat_member(msg.chat.id, uid, only_if_banned=True)
+        await db.remove_ban(msg.chat.id, uid)
         await reply(msg, "unban", user=mention(uid, name))
     except TelegramBadRequest as e:
         await reply(msg, "cant", reason=html.escape(str(e)))
@@ -146,33 +152,49 @@ async def cmd_kick(msg: Message, bot: Bot):
 
 @router.message(Command("report", "репорт", "жалоба", prefix="/!"))
 async def cmd_report(msg: Message, bot: Bot):
-    if not msg.reply_to_message:
-        return await reply(msg, "no_target")
-    if not REPORT_CHAT_ID:
+    s = await db.settings(msg.chat.id)
+    report_chat = int(s.get("report_chat") or 0) or REPORT_CHAT_ID
+    if not report_chat:
         return await reply(msg, "report_no_chat")
-    target = msg.reply_to_message.from_user
+    uid, name, args = await resolve_target(msg)
+    if not uid:
+        return await reply(msg, "no_target")
+    src = msg.reply_to_message
     link = ""
-    if msg.chat.username:
-        link = f"\nhttps://t.me/{msg.chat.username}/{msg.reply_to_message.message_id}"
-    elif str(msg.chat.id).startswith("-100"):
-        link = f"\nhttps://t.me/c/{str(msg.chat.id)[4:]}/{msg.reply_to_message.message_id}"
+    if src:
+        if msg.chat.username:
+            link = f"\nhttps://t.me/{msg.chat.username}/{src.message_id}"
+        elif str(msg.chat.id).startswith("-100"):
+            link = f"\nhttps://t.me/c/{str(msg.chat.id)[4:]}/{src.message_id}"
+    quoted = html.escape((src.text or src.caption or "[медиа]")[:300]) if src else "—"
+    comment = html.escape(" ".join(args))[:200] if args else ""
     text = (f"🚨 жалоба в «{html.escape(msg.chat.title or '')}»\n"
             f"от: {mention(msg.from_user.id, msg.from_user.first_name)}\n"
-            f"на: {mention(target.id, target.first_name)} (id {target.id})\n"
-            f"текст: {html.escape((msg.reply_to_message.text or msg.reply_to_message.caption or '[медиа]')[:300])}{link}")
-    cid, uid = msg.chat.id, target.id
+            f"на: {mention(uid, name)} (id {uid})\n"
+            f"текст: {quoted}" + (f"\nкомментарий: {comment}" if comment else "") + link)
+    cid = msg.chat.id
     kb = InlineKeyboardMarkup(inline_keyboard=[[
         InlineKeyboardButton(text="🔇 мут 1ч", callback_data=f"rep:m:{cid}:{uid}"),
         InlineKeyboardButton(text="⛔ бан", callback_data=f"rep:b:{cid}:{uid}"),
         InlineKeyboardButton(text="🙈 игнор", callback_data=f"rep:i:{cid}:{uid}"),
     ]])
-    await bot.send_message(REPORT_CHAT_ID, text, reply_markup=kb)
+    try:
+        await bot.send_message(report_chat, text, reply_markup=kb)
+    except TelegramBadRequest as e:
+        return await reply(msg, "cant", reason=html.escape(f"не могу писать в чат жалоб ({e.message}). проверь /settings report_chat и что я там есть"))
     try:
         await msg.delete()
     except TelegramBadRequest:
         pass
     sent = await bot.send_message(msg.chat.id, (await _say(msg, "report_sent")))
     await db.remember_bot_message(msg.chat.id, sent.message_id)
+
+
+@router.message(Command("id", "айди", "chatid", prefix="/!"))
+async def cmd_id(msg: Message):
+    """!id — id этого чата (для /settings report_chat) и твой id."""
+    await msg.answer(f"id чата: <code>{msg.chat.id}</code>\nтвой id: <code>{msg.from_user.id}</code>\n\n"
+                     f"чтобы жалобы шли сюда — в основном чате: <code>/settings report_chat {msg.chat.id}</code>")
 
 
 @router.callback_query(F.data.startswith("rep:"))
